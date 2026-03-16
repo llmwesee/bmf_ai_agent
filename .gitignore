@@ -14,5 +14,6 @@ __pycache__/
 .env
 pytest-cache-files-*/
 data/*.db
+!data/bfm_demo.db
 data/uploads/*
 !data/uploads/.gitkeep
