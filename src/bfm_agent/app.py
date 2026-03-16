@@ -39,9 +39,9 @@ def _analytics(session: Session) -> AnalyticsService:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "app_name": settings.app_name,
             "default_provider": settings.default_provider,
         },

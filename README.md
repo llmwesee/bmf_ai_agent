@@ -6,6 +6,7 @@ End-to-end demo application for Business Finance Management analysts in IT/ITeS 
 
 - Python 3.11
 - FastAPI
+- React
 - LangChain
 - LangGraph
 - Langfuse
@@ -40,6 +41,7 @@ Install dependencies if needed:
 
 ```powershell
 uv pip install --python .\.venv\Scripts\python.exe -e .[dev] --cache-dir .uv-cache
+npm.cmd install
 ```
 
 Create a local env file:
@@ -53,6 +55,16 @@ Optional credentials:
 - `OPENAI_API_KEY` enables `openai`
 - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` enable `azure_openai`
 - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` enable Langfuse traces
+
+## Frontend
+
+The UI is a React app bundled into `src/bfm_agent/static/app.js`, which FastAPI serves directly.
+
+Rebuild the frontend after React changes:
+
+```powershell
+npm.cmd run build
+```
 
 ## Run the app
 

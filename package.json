@@ -1,0 +1,15 @@
+{
+  "name": "bfm-ai-agent-ui",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "node ./frontend/build.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.11"
+  }
+}

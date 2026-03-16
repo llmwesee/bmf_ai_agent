@@ -2,6 +2,10 @@ from __future__ import annotations
 
 
 def test_dashboard_endpoints(client):
+    index = client.get("/")
+    assert index.status_code == 200
+    assert 'id="root"' in index.text
+
     summary = client.get("/api/summary")
     assert summary.status_code == 200
     payload = summary.json()

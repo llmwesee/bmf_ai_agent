@@ -1,6 +1,7 @@
 .venv/
 .python/
 .uv-cache/
+node_modules/
 __pycache__/
 .pytest_cache/
 .test-artifacts/
