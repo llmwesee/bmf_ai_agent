@@ -1,0 +1,17 @@
+.venv/
+.python/
+.uv-cache/
+__pycache__/
+.pytest_cache/
+.test-artifacts/
+.coverage
+.ruff_cache/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.env
+pytest-cache-files-*/
+data/*.db
+data/uploads/*
+!data/uploads/.gitkeep

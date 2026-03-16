@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ app_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}" />
+  </head>
+  <body>
+    <div class="background-orb orb-a"></div>
+    <div class="background-orb orb-b"></div>
+    <main class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Operational Finance Demo</p>
+          <h1>{{ app_name }}</h1>
+          <p class="hero-copy">
+            Revenue realization monitoring, billing delay tracking, overdue collection nudges, and AI-drafted account manager follow-ups for BFM leads.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <label class="provider-picker">
+            <span>LLM Provider</span>
+            <select id="providerSelect" data-default-provider="{{ default_provider }}"></select>
+          </label>
+          <button id="refreshButton" class="button secondary">Refresh Dashboard</button>
+          <button id="reseedButton" class="button">Reset Demo Data</button>
+          <a class="button tertiary" href="/api/data/workbook">Download Workbook</a>
+        </div>
+      </header>
+
+      <section class="summary-grid" id="summaryGrid"></section>
+
+      <section class="layout-grid">
+        <div class="panel panel-large">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Focus Queue</p>
+              <h2>High-priority nudges</h2>
+            </div>
+          </div>
+          <div id="alertsList" class="alert-list"></div>
+        </div>
+
+        <aside class="panel followup-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Agent Output</p>
+              <h2>Follow-up draft</h2>
+            </div>
+          </div>
+          <div id="followupEmpty" class="empty-state">
+            Select an alert or project to generate a follow-up draft.
+          </div>
+          <div id="followupContent" class="followup-content hidden">
+            <p id="followupSummary" class="followup-summary"></p>
+            <div class="followup-block">
+              <span class="label">Nudge</span>
+              <p id="followupNudge"></p>
+            </div>
+            <div class="followup-block">
+              <span class="label">Email Subject</span>
+              <p id="followupSubject"></p>
+            </div>
+            <div class="followup-block">
+              <span class="label">Email Body</span>
+              <pre id="followupBody"></pre>
+            </div>
+            <div class="followup-block">
+              <span class="label">Recommended Action</span>
+              <p id="followupAction"></p>
+            </div>
+            <div class="followup-block">
+              <span class="label">Supporting Facts</span>
+              <ul id="followupFacts"></ul>
+            </div>
+            <a id="traceLink" class="trace-link hidden" target="_blank" rel="noreferrer">Open Langfuse Trace</a>
+          </div>
+        </aside>
+      </section>
+
+      <section class="layout-grid bottom-grid">
+        <div class="panel panel-large">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Revenue Monitor</p>
+              <h2>Revenue realization table</h2>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Project</th>
+                  <th>Manager</th>
+                  <th>Plan</th>
+                  <th>Recognized</th>
+                  <th>Forecast</th>
+                  <th>Gap</th>
+                  <th>Unbilled</th>
+                  <th>Overdue</th>
+                  <th>Risk</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="revenueTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Portfolio Brief</p>
+              <h2>Report snapshot</h2>
+            </div>
+          </div>
+          <p id="reportNarrative" class="report-narrative"></p>
+          <div class="mini-section">
+            <span class="label">Top gap accounts</span>
+            <div id="topAccounts" class="stack-list"></div>
+          </div>
+          <div class="mini-section">
+            <span class="label">Delivery units</span>
+            <div id="deliveryUnits" class="stack-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Collections Tracker</p>
+            <h2>Open invoices</h2>
+          </div>
+        </div>
+        <div class="table-wrapper compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Project</th>
+                <th>Invoice</th>
+                <th>Amount</th>
+                <th>Outstanding</th>
+                <th>Due Date</th>
+                <th>Overdue Days</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="collectionsTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="{{ url_for('static', path='/app.js') }}"></script>
+  </body>
+</html>
