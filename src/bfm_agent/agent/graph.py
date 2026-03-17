@@ -6,8 +6,8 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from bfm_agent.analytics import AnalyticsService
-from bfm_agent.langfuse_utils import log_agent_run
-from bfm_agent.llm import generate_follow_up
+from bfm_agent.langfuse_utils import TraceLogger
+from bfm_agent.llm import generate_follow_up, model_name_for_provider
 from bfm_agent.schemas import AgentKey, AgentRequest, AgentResponse
 
 
@@ -25,6 +25,7 @@ class BFMAgentRunner:
         self.session = session
         self.analytics = AnalyticsService(session)
         self.graph = self._build_graph()
+        self.trace_logger: TraceLogger | None = None
 
     def _build_graph(self):
         graph = StateGraph(AgentState)
@@ -57,13 +58,27 @@ class BFMAgentRunner:
 
     def _load_context(self, state: AgentState) -> AgentState:
         request = state["request"]
-        return {
-            "context": self.analytics.entity_context(
-                agent_key=request.agent_key,
-                entity_type=request.entity_type,
-                entity_id=request.entity_id,
+        context = self.analytics.entity_context(
+            agent_key=request.agent_key,
+            entity_type=request.entity_type,
+            entity_id=request.entity_id,
+        )
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="tool_call.entity_context",
+                input_payload={
+                    "agent_key": request.agent_key,
+                    "entity_type": request.entity_type,
+                    "entity_id": request.entity_id,
+                },
+                output_payload={
+                    "account_name": context.get("account_name"),
+                    "project_code": context.get("project_code"),
+                    "summary_metrics": context.get("summary_metrics"),
+                },
+                metadata={"phase": "tool_call", "tool": "analytics.entity_context"},
             )
-        }
+        return {"context": context}
 
     def _route_agent(self, state: AgentState) -> AgentKey:
         return state["request"].agent_key
@@ -82,11 +97,19 @@ class BFMAgentRunner:
             f"Current unbilled revenue is ${float(metrics['unbilled_revenue']):,.0f} and the last update is aging.",
         ]
         summary = f"{context['account_name']} revenue realization is under target and needs account manager follow-up."
-        return {
+        output = {
             "supporting_facts": facts,
             "summary": summary,
             "risk_level": self._risk_from_queue("revenue_realization", state["request"].entity_type, state["request"].entity_id),
         }
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="analysis.revenue_realization",
+                input_payload={"metrics": metrics, "account_name": context.get("account_name")},
+                output_payload={"summary": summary, "risk_level": output["risk_level"], "supporting_facts": facts},
+                metadata={"phase": "analysis", "agent_key": "revenue_realization"},
+            )
+        return output
 
     def _analyze_billing(self, state: AgentState) -> AgentState:
         context = state["context"]
@@ -97,11 +120,19 @@ class BFMAgentRunner:
             f"Billing trigger delay is {int(metrics['billing_delay_days'])} days with response status {context['primary_record']['account_manager_response']}.",
         ]
         summary = f"{context['account_name']} has a billing trigger exception that can delay revenue realization."
-        return {
+        output = {
             "supporting_facts": facts,
             "summary": summary,
             "risk_level": self._risk_from_queue("billing_trigger", state["request"].entity_type, state["request"].entity_id),
         }
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="analysis.billing_trigger",
+                input_payload={"metrics": metrics, "account_name": context.get("account_name")},
+                output_payload={"summary": summary, "risk_level": output["risk_level"], "supporting_facts": facts},
+                metadata={"phase": "analysis", "agent_key": "billing_trigger"},
+            )
+        return output
 
     def _analyze_unbilled(self, state: AgentState) -> AgentState:
         context = state["context"]
@@ -112,11 +143,19 @@ class BFMAgentRunner:
             f"Revenue forecast remains ${float(metrics['revenue_forecast']):,.0f} while billing is pending.",
         ]
         summary = f"{context['account_name']} has unbilled revenue exposure that needs billing release."
-        return {
+        output = {
             "supporting_facts": facts,
             "summary": summary,
             "risk_level": self._risk_from_queue("unbilled_revenue", state["request"].entity_type, state["request"].entity_id),
         }
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="analysis.unbilled_revenue",
+                input_payload={"metrics": metrics, "account_name": context.get("account_name")},
+                output_payload={"summary": summary, "risk_level": output["risk_level"], "supporting_facts": facts},
+                metadata={"phase": "analysis", "agent_key": "unbilled_revenue"},
+            )
+        return output
 
     def _analyze_collections(self, state: AgentState) -> AgentState:
         context = state["context"]
@@ -127,11 +166,19 @@ class BFMAgentRunner:
             f"The client response status is {context['primary_record']['client_response_status']}.",
         ]
         summary = f"{context['account_name']} collections risk is increasing and payment follow-up is required."
-        return {
+        output = {
             "supporting_facts": facts,
             "summary": summary,
             "risk_level": self._risk_from_queue("collection_monitoring", state["request"].entity_type, state["request"].entity_id),
         }
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="analysis.collection_monitoring",
+                input_payload={"metrics": metrics, "account_name": context.get("account_name")},
+                output_payload={"summary": summary, "risk_level": output["risk_level"], "supporting_facts": facts},
+                metadata={"phase": "analysis", "agent_key": "collection_monitoring"},
+            )
+        return output
 
     def _analyze_forecast(self, state: AgentState) -> AgentState:
         context = state["context"]
@@ -144,11 +191,19 @@ class BFMAgentRunner:
             f"Unbilled revenue and outstanding receivables are contributing to the shortfall risk.",
         ]
         summary = f"{context['account_name']} forecast is at risk of missing the monthly revenue target."
-        return {
+        output = {
             "supporting_facts": facts,
             "summary": summary,
             "risk_level": self._risk_from_queue("revenue_forecasting", state["request"].entity_type, state["request"].entity_id),
         }
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="analysis.revenue_forecasting",
+                input_payload={"metrics": metrics, "account_name": context.get("account_name")},
+                output_payload={"summary": summary, "risk_level": output["risk_level"], "supporting_facts": facts},
+                metadata={"phase": "analysis", "agent_key": "revenue_forecasting"},
+            )
+        return output
 
     def _draft_follow_up(self, state: AgentState) -> AgentState:
         request = state["request"]
@@ -159,6 +214,20 @@ class BFMAgentRunner:
             supporting_facts=state["supporting_facts"],
             question=request.question,
         )
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="llm.generation",
+                input_payload={
+                    "provider": request.provider,
+                    "model": model_name_for_provider(request.provider),
+                    "focus_area": request.agent_key,
+                    "question": request.question,
+                    "context": state["context"],
+                    "supporting_facts": state["supporting_facts"],
+                },
+                output_payload=draft.model_dump(),
+                metadata={"phase": "llm_generation", "agent_key": request.agent_key, "tool": "llm"},
+            )
         return {"draft": draft.model_dump()}
 
     def _risk_from_queue(self, agent_key: AgentKey, entity_type: str, entity_id: int) -> str:
@@ -168,18 +237,24 @@ class BFMAgentRunner:
         return "Low"
 
     def run(self, request: AgentRequest) -> AgentResponse:
+        self.trace_logger = TraceLogger(
+            name="bfm-agent-follow-up",
+            input_payload=request.model_dump(),
+            metadata={"agent_key": request.agent_key, "provider": request.provider},
+        )
         state = self.graph.invoke({"request": request})
         context = state["context"]
         draft = state["draft"]
-        trace_id, trace_url = log_agent_run(
-            input_payload=request.model_dump(),
-            output_payload={"summary": state["summary"], "risk_level": state["risk_level"], "nudge": draft["nudge"]},
-            metadata={
-                "account_name": context["account_name"],
-                "project_code": context.get("project_code"),
-                "agent_key": request.agent_key,
-            },
-        )
+        if self.trace_logger:
+            self.trace_logger.log(
+                name="bfm-agent-output",
+                input_payload={"agent_key": request.agent_key},
+                output_payload={"summary": state["summary"], "risk_level": state["risk_level"], "nudge": draft["nudge"]},
+                metadata={"phase": "output", "agent_key": request.agent_key},
+            )
+            trace_id, trace_url = self.trace_logger.finalize()
+        else:
+            trace_id, trace_url = None, None
         return AgentResponse(
             provider=request.provider,
             agent_key=request.agent_key,

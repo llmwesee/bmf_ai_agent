@@ -202,6 +202,15 @@ def _model_for_provider(provider: str):
     return None
 
 
+def model_name_for_provider(provider: str) -> str:
+    settings = get_settings()
+    if provider == "openai":
+        return settings.openai_model
+    if provider == "azure_openai":
+        return settings.azure_openai_model
+    return "deterministic-demo"
+
+
 def generate_follow_up(provider: str, focus_area: str, context: dict[str, object], supporting_facts: list[str], question: str | None) -> FollowUpDraft:
     settings = get_settings()
     issue = _provider_configuration_issue(provider, settings)

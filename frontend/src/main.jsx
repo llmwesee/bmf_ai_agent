@@ -435,6 +435,8 @@ function App({ appName, defaultProvider }) {
   const [draftLoading, setDraftLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [savingThresholdId, setSavingThresholdId] = useState(null);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
 
@@ -756,6 +758,31 @@ function App({ appName, defaultProvider }) {
     }
   }
 
+  async function uploadWorkbook() {
+    if (!uploadFile) {
+      setError("Select an .xlsx workbook to upload.");
+      return;
+    }
+    setUploading(true);
+    setError("");
+    setStatusMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadFile);
+      const response = await fetchJson("/api/data/upload", {
+        method: "POST",
+        body: formData,
+      });
+      setStatusMessage(`Workbook uploaded. ${response.records_loaded} records loaded from ${response.workbook_path}.`);
+      setUploadFile(null);
+      await loadDashboard();
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function handleThresholdChange(id, key, value) {
     setThresholdDrafts((current) => ({
       ...current,
@@ -1016,6 +1043,22 @@ function App({ appName, defaultProvider }) {
                 <div>
                   <p className="panel-kicker">Controls</p>
                   <h2>Risk thresholds and reply automation</h2>
+                </div>
+              </div>
+              <div className="upload-panel">
+                <div>
+                  <span className="label">Workbook upload</span>
+                  <p>Upload an .xlsx workbook (for example `sample_data.xlsx`) to recalculate all agent KPIs and nudges.</p>
+                </div>
+                <div className="upload-actions">
+                  <input
+                    type="file"
+                    accept=".xlsx"
+                    onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+                  />
+                  <button onClick={uploadWorkbook} disabled={uploading}>
+                    {uploading ? "Uploading..." : "Upload workbook"}
+                  </button>
                 </div>
               </div>
               <ThresholdEditor

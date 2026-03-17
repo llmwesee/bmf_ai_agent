@@ -523,7 +523,8 @@ td {
 
 .threshold-fields input,
 .hero-actions select,
-.draft-actions select {
+.draft-actions select,
+.upload-actions input {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -537,6 +538,26 @@ td {
 .queue-footer button {
   padding: 0.7rem 0.9rem;
   border-radius: 12px;
+}
+
+.upload-panel {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 0.95rem;
+  background: rgba(255, 255, 255, 0.75);
+  margin-bottom: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.upload-panel p {
+  color: var(--muted);
+  margin-bottom: 0;
+}
+
+.upload-actions {
+  display: grid;
+  gap: 0.65rem;
 }
 
 .status-banner {
