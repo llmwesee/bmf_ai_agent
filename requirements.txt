@@ -1,0 +1,14 @@
+fastapi>=0.115.12
+google-api-python-client>=2.166.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.1
+jinja2>=3.1.6
+langchain>=0.3.23
+langchain-openai>=0.3.12
+langfuse>=3.2.4
+langgraph>=0.3.31
+openpyxl>=3.1.5
+pydantic-settings>=2.8.1
+python-multipart>=0.0.20
+sqlalchemy>=2.0.40
+uvicorn[standard]>=0.34.0
