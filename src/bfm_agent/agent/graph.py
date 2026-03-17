@@ -8,8 +8,7 @@ from sqlalchemy.orm import Session
 from bfm_agent.analytics import AnalyticsService
 from bfm_agent.langfuse_utils import log_agent_run
 from bfm_agent.llm import generate_follow_up
-from bfm_agent.models import FollowUpLog
-from bfm_agent.schemas import AgentRequest, AgentResponse
+from bfm_agent.schemas import AgentKey, AgentRequest, AgentResponse
 
 
 class AgentState(TypedDict, total=False):
@@ -30,79 +29,164 @@ class BFMAgentRunner:
     def _build_graph(self):
         graph = StateGraph(AgentState)
         graph.add_node("load_context", self._load_context)
-        graph.add_node("prepare_findings", self._prepare_findings)
+        graph.add_node("analyze_revenue", self._analyze_revenue)
+        graph.add_node("analyze_billing", self._analyze_billing)
+        graph.add_node("analyze_unbilled", self._analyze_unbilled)
+        graph.add_node("analyze_collections", self._analyze_collections)
+        graph.add_node("analyze_forecast", self._analyze_forecast)
         graph.add_node("draft_follow_up", self._draft_follow_up)
         graph.add_edge(START, "load_context")
-        graph.add_edge("load_context", "prepare_findings")
-        graph.add_edge("prepare_findings", "draft_follow_up")
+        graph.add_conditional_edges(
+            "load_context",
+            self._route_agent,
+            {
+                "revenue_realization": "analyze_revenue",
+                "billing_trigger": "analyze_billing",
+                "unbilled_revenue": "analyze_unbilled",
+                "collection_monitoring": "analyze_collections",
+                "revenue_forecasting": "analyze_forecast",
+            },
+        )
+        graph.add_edge("analyze_revenue", "draft_follow_up")
+        graph.add_edge("analyze_billing", "draft_follow_up")
+        graph.add_edge("analyze_unbilled", "draft_follow_up")
+        graph.add_edge("analyze_collections", "draft_follow_up")
+        graph.add_edge("analyze_forecast", "draft_follow_up")
         graph.add_edge("draft_follow_up", END)
         return graph.compile()
 
     def _load_context(self, state: AgentState) -> AgentState:
         request = state["request"]
-        return {"context": self.analytics.account_snapshot(account_name=request.account_name, project_code=request.project_code)}
+        return {
+            "context": self.analytics.entity_context(
+                agent_key=request.agent_key,
+                entity_type=request.entity_type,
+                entity_id=request.entity_id,
+            )
+        }
 
-    def _prepare_findings(self, state: AgentState) -> AgentState:
-        request = state["request"]
+    def _route_agent(self, state: AgentState) -> AgentKey:
+        return state["request"].agent_key
+
+    def _analyze_revenue(self, state: AgentState) -> AgentState:
         context = state["context"]
-        primary = context["primary_row"]
-        totals = context["totals"]
-        gap_ratio = abs(float(totals["revenue_gap"])) / float(totals["revenue_plan"]) if float(totals["revenue_plan"]) else 0.0
-        supporting_facts = [
-            f"{primary['project_code']} has recognized ${float(primary['revenue_recognized']):,.0f} against a monthly plan of ${float(primary['revenue_plan']):,.0f}.",
-            f"Portfolio forecast variance is ${float(totals['revenue_gap']):,.0f}, equivalent to {gap_ratio:.0%} below target.",
-            f"Unbilled revenue stands at ${float(totals['total_unbilled']):,.0f} and overdue collections total ${float(totals['overdue_amount']):,.0f}.",
+        metrics = context["summary_metrics"]
+        plan = float(metrics["revenue_plan"])
+        forecast = float(metrics["revenue_forecast"])
+        recognized = float(metrics["revenue_recognized"])
+        gap = float(metrics["revenue_gap"])
+        shortfall = abs(gap) / plan if plan and gap < 0 else 0.0
+        facts = [
+            f"{context['project_code']} has recognized ${recognized:,.0f} against a monthly target of ${plan:,.0f}.",
+            f"Forecast is ${forecast:,.0f}, creating a ${gap:,.0f} variance to plan.",
+            f"Current unbilled revenue is ${float(metrics['unbilled_revenue']):,.0f} and the last update is aging.",
         ]
-        if request.focus_area == "billing":
-            supporting_facts.append(
-                f"{primary['project_code']} is carrying ${float(primary['unbilled_amount']):,.0f} unbilled with {int(primary['billing_delay_days'])} delay days."
-            )
-        if request.focus_area == "collections":
-            supporting_facts.append(
-                f"{primary['project_code']} has ${float(primary['outstanding_collection']):,.0f} outstanding with {int(primary['overdue_days'])} overdue days."
-            )
-        summary = (
-            f"{context['account_name']} is {context['risk_level'].lower()} risk with a "
-            f"${float(totals['revenue_gap']):,.0f} forecast gap and ${float(totals['total_unbilled']):,.0f} pending billing."
-        )
-        return {"supporting_facts": supporting_facts, "summary": summary, "risk_level": str(context["risk_level"])}
+        summary = f"{context['account_name']} revenue realization is under target and needs account manager follow-up."
+        return {
+            "supporting_facts": facts,
+            "summary": summary,
+            "risk_level": self._risk_from_queue("revenue_realization", state["request"].entity_type, state["request"].entity_id),
+        }
+
+    def _analyze_billing(self, state: AgentState) -> AgentState:
+        context = state["context"]
+        metrics = context["summary_metrics"]
+        facts = [
+            f"{context['primary_record']['milestone_name']} completed on {context['primary_record']['completion_date']}.",
+            f"${float(metrics['billable_amount']):,.0f} is billable and ${float(metrics['unbilled_amount']):,.0f} remains pending invoicing.",
+            f"Billing trigger delay is {int(metrics['billing_delay_days'])} days with response status {context['primary_record']['account_manager_response']}.",
+        ]
+        summary = f"{context['account_name']} has a billing trigger exception that can delay revenue realization."
+        return {
+            "supporting_facts": facts,
+            "summary": summary,
+            "risk_level": self._risk_from_queue("billing_trigger", state["request"].entity_type, state["request"].entity_id),
+        }
+
+    def _analyze_unbilled(self, state: AgentState) -> AgentState:
+        context = state["context"]
+        metrics = context["summary_metrics"]
+        facts = [
+            f"{context['project_code']} has ${float(metrics['unbilled_revenue']):,.0f} recognized but not billed.",
+            f"The unbilled aging is {int(metrics['days_unbilled'])} days.",
+            f"Revenue forecast remains ${float(metrics['revenue_forecast']):,.0f} while billing is pending.",
+        ]
+        summary = f"{context['account_name']} has unbilled revenue exposure that needs billing release."
+        return {
+            "supporting_facts": facts,
+            "summary": summary,
+            "risk_level": self._risk_from_queue("unbilled_revenue", state["request"].entity_type, state["request"].entity_id),
+        }
+
+    def _analyze_collections(self, state: AgentState) -> AgentState:
+        context = state["context"]
+        metrics = context["summary_metrics"]
+        facts = [
+            f"Invoice {context['primary_record']['invoice_number']} has an outstanding balance of ${float(metrics['outstanding_balance']):,.0f}.",
+            f"The invoice is overdue by {int(metrics['overdue_days'])} days against due date {context['primary_record']['due_date']}.",
+            f"The client response status is {context['primary_record']['client_response_status']}.",
+        ]
+        summary = f"{context['account_name']} collections risk is increasing and payment follow-up is required."
+        return {
+            "supporting_facts": facts,
+            "summary": summary,
+            "risk_level": self._risk_from_queue("collection_monitoring", state["request"].entity_type, state["request"].entity_id),
+        }
+
+    def _analyze_forecast(self, state: AgentState) -> AgentState:
+        context = state["context"]
+        metrics = context["summary_metrics"]
+        plan = float(metrics["revenue_plan"])
+        forecast = float(metrics["revenue_forecast"])
+        facts = [
+            f"{context['project_code']} is forecast to close at ${forecast:,.0f} against a ${plan:,.0f} target.",
+            f"Forecast confidence is {float(metrics['forecast_confidence']):.0%}.",
+            f"Unbilled revenue and outstanding receivables are contributing to the shortfall risk.",
+        ]
+        summary = f"{context['account_name']} forecast is at risk of missing the monthly revenue target."
+        return {
+            "supporting_facts": facts,
+            "summary": summary,
+            "risk_level": self._risk_from_queue("revenue_forecasting", state["request"].entity_type, state["request"].entity_id),
+        }
 
     def _draft_follow_up(self, state: AgentState) -> AgentState:
         request = state["request"]
         draft = generate_follow_up(
             provider=request.provider,
-            focus_area=request.focus_area,
+            focus_area=request.agent_key,
             context=state["context"],
             supporting_facts=state["supporting_facts"],
             question=request.question,
         )
         return {"draft": draft.model_dump()}
 
+    def _risk_from_queue(self, agent_key: AgentKey, entity_type: str, entity_id: int) -> str:
+        for item in self.analytics.dashboard_queue():
+            if item.agent_key == agent_key and item.entity_type == entity_type and item.entity_id == entity_id:
+                return item.severity
+        return "Low"
+
     def run(self, request: AgentRequest) -> AgentResponse:
         state = self.graph.invoke({"request": request})
         context = state["context"]
         draft = state["draft"]
-        self.session.add(
-            FollowUpLog(
-                account_id=None,
-                project_id=None,
-                provider=request.provider,
-                focus_area=request.focus_area,
-                subject=draft["subject"],
-                message_body=draft["body"],
-            )
-        )
-        self.session.commit()
         trace_id, trace_url = log_agent_run(
             input_payload=request.model_dump(),
             output_payload={"summary": state["summary"], "risk_level": state["risk_level"], "nudge": draft["nudge"]},
-            metadata={"account_name": context["account_name"], "project_code": context["project_code"]},
+            metadata={
+                "account_name": context["account_name"],
+                "project_code": context.get("project_code"),
+                "agent_key": request.agent_key,
+            },
         )
         return AgentResponse(
             provider=request.provider,
+            agent_key=request.agent_key,
+            entity_type=request.entity_type,
+            entity_id=request.entity_id,
             account_name=str(context["account_name"]),
-            project_code=str(context["project_code"]),
-            focus_area=request.focus_area,
+            project_code=str(context.get("project_code")) if context.get("project_code") else None,
             summary=state["summary"],
             risk_level=state["risk_level"],
             supporting_facts=state["supporting_facts"],

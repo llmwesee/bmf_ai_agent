@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str = Field(default="https://cloud.langfuse.com")
+    gmail_client_id: str | None = None
+    gmail_client_secret: str | None = None
+    gmail_refresh_token: str | None = None
+    gmail_user_email: str | None = None
 
     @property
     def sqlite_file(self) -> Path:

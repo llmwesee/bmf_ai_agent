@@ -25,13 +25,20 @@ def log_agent_run(input_payload: dict[str, Any], output_payload: dict[str, Any],
     client = get_langfuse_client()
     if client is None:
         return None, None
-    trace_id = client.create_trace_id()
-    client.create_event(
-        trace_context={"trace_id": trace_id},
-        name="bfm-agent-follow-up",
-        input=input_payload,
-        output=output_payload,
-        metadata=metadata or {},
-    )
-    client.flush()
-    return trace_id, client.get_trace_url(trace_id=trace_id)
+    try:
+        trace_id = client.create_trace_id()
+        client.create_event(
+            trace_context={"trace_id": trace_id},
+            name="bfm-agent-follow-up",
+            input=input_payload,
+            output=output_payload,
+            metadata=metadata or {},
+        )
+        client.flush()
+        try:
+            trace_url = client.get_trace_url(trace_id=trace_id)
+        except Exception:
+            trace_url = None
+        return trace_id, trace_url
+    except Exception:
+        return None, None
