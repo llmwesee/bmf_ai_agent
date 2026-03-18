@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import logging
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from bfm_agent.config import Settings, get_settings
 from bfm_agent.schemas import FollowUpDraft, ProviderStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 LLM_PROMPT = ChatPromptTemplate.from_messages(
@@ -30,8 +34,49 @@ LLM_PROMPT = ChatPromptTemplate.from_messages(
 )
 
 
+class ProviderConfigurationError(RuntimeError):
+    pass
+
+
+def _ascii_secret_issue(env_var: str, value: str | None) -> str | None:
+    if not value:
+        return f"Set {env_var} to enable."
+    if value.isascii():
+        return None
+    return f"{env_var} contains non-ASCII characters. Retype or paste the key again using plain ASCII characters."
+
+
+def _openai_configuration_issue(settings: Settings) -> str | None:
+    return _ascii_secret_issue("OPENAI_API_KEY", settings.openai_api_key)
+
+
+def _azure_configuration_issue(settings: Settings) -> str | None:
+    missing = [
+        env_var
+        for env_var, value in [
+            ("AZURE_OPENAI_API_KEY", settings.azure_openai_api_key),
+            ("AZURE_OPENAI_ENDPOINT", settings.azure_openai_endpoint),
+            ("AZURE_OPENAI_DEPLOYMENT", settings.azure_openai_deployment),
+        ]
+        if not value
+    ]
+    if missing:
+        return f"Set {', '.join(missing)} to enable."
+    return _ascii_secret_issue("AZURE_OPENAI_API_KEY", settings.azure_openai_api_key)
+
+
+def _provider_configuration_issue(provider: str, settings: Settings) -> str | None:
+    if provider == "openai":
+        return _openai_configuration_issue(settings)
+    if provider == "azure_openai":
+        return _azure_configuration_issue(settings)
+    return None
+
+
 def provider_statuses(settings: Settings | None = None) -> list[ProviderStatus]:
     settings = settings or get_settings()
+    openai_issue = _openai_configuration_issue(settings)
+    azure_issue = _azure_configuration_issue(settings)
     return [
         ProviderStatus(
             provider="mock",
@@ -42,70 +87,101 @@ def provider_statuses(settings: Settings | None = None) -> list[ProviderStatus]:
         ProviderStatus(
             provider="openai",
             model=settings.openai_model,
-            available=bool(settings.openai_api_key),
-            detail="Configured with OpenAI GPT-4.1." if settings.openai_api_key else "Set OPENAI_API_KEY to enable.",
+            available=openai_issue is None,
+            detail="Configured with OpenAI GPT-4.1." if openai_issue is None else openai_issue,
         ),
         ProviderStatus(
             provider="azure_openai",
             model=settings.azure_openai_model,
-            available=bool(settings.azure_openai_api_key and settings.azure_openai_endpoint and settings.azure_openai_deployment),
+            available=azure_issue is None,
             detail=(
                 "Configured with Azure OpenAI GPT-4.1 deployment."
-                if settings.azure_openai_api_key and settings.azure_openai_endpoint and settings.azure_openai_deployment
-                else "Set Azure endpoint, key, and deployment to enable."
+                if azure_issue is None
+                else azure_issue
             ),
         ),
     ]
 
 
 def _fallback_draft(context: dict[str, object], supporting_facts: list[str], focus_area: str) -> FollowUpDraft:
-    primary = context["primary_row"]
     account_name = str(context["account_name"])
-    project_code = str(primary["project_code"])
-    account_manager = str(context["account_manager"])
-    totals = context["totals"]
-    gap_ratio = abs(float(totals["revenue_gap"])) / float(totals["revenue_plan"]) if float(totals["revenue_plan"]) else 0.0
+    project_code = str(context.get("project_code") or "portfolio")
+    recipient_name = str(context.get("recipient_name") or context.get("account_manager") or "team")
+    metrics = context.get("summary_metrics", {})
+    revenue_plan = float(metrics.get("revenue_plan", 0.0)) if isinstance(metrics, dict) else 0.0
+    revenue_forecast = float(metrics.get("revenue_forecast", 0.0)) if isinstance(metrics, dict) else 0.0
+    revenue_gap = float(metrics.get("revenue_gap", revenue_forecast - revenue_plan)) if isinstance(metrics, dict) else 0.0
+    shortfall = abs(revenue_gap) / revenue_plan if revenue_plan and revenue_gap < 0 else 0.0
 
-    nudge = (
-        f"{account_name} revenue is tracking {gap_ratio:.0%} below monthly target. "
-        f"Do you want me to follow up with {account_manager} on {project_code}?"
-    )
-    subject = f"Action needed: {account_name} {focus_area} follow-up for {project_code}"
+    nudge = f"{account_name} {focus_area.replace('_', ' ')} needs follow-up. Do you want me to contact {recipient_name} for {project_code}?"
+    if focus_area == "revenue_realization" and revenue_plan:
+        nudge = (
+            f"{account_name} account revenue is running {shortfall:.0%} below monthly target. "
+            f"Do you want me to follow up with {recipient_name}?"
+        )
+    if focus_area == "billing_trigger":
+        nudge = (
+            f"{account_name} billing trigger is pending for {project_code}. "
+            f"Do you want me to follow up with {recipient_name}?"
+        )
+    if focus_area == "unbilled_revenue":
+        nudge = (
+            f"{account_name} has recognized revenue waiting to be billed on {project_code}. "
+            f"Do you want me to follow up with {recipient_name}?"
+        )
+    if focus_area == "collection_monitoring":
+        nudge = (
+            f"{account_name} has an overdue collection item on {project_code}. "
+            f"Do you want me to send a payment reminder to {recipient_name}?"
+        )
+    if focus_area == "revenue_forecasting" and revenue_plan:
+        nudge = (
+            f"{account_name} is forecast below target for {project_code}. "
+            f"Do you want me to review pending billing milestones with {recipient_name}?"
+        )
+
+    subject = f"Action needed: {account_name} {focus_area.replace('_', ' ')} follow-up for {project_code}"
     body = (
-        f"Hi {account_manager},\n\n"
-        f"I am reviewing the current finance position for {account_name} / {project_code}. "
-        f"We are seeing a portfolio forecast gap of ${float(totals['revenue_gap']):,.0f}, "
-        f"along with ${float(totals['total_unbilled']):,.0f} pending billing and "
-        f"${float(totals['overdue_amount']):,.0f} in outstanding collections.\n\n"
+        f"Hi {recipient_name},\n\n"
+        f"I am reviewing the current finance position for {account_name}"
+        f"{' / ' + project_code if project_code != 'portfolio' else ''}. "
+        f"The current forecast variance is ${revenue_gap:,.0f} against plan.\n\n"
         f"Key points:\n- " + "\n- ".join(supporting_facts[:3]) + "\n\n"
-        f"Please confirm the blockers, the expected closure date, and any support needed from finance so we can recover revenue in this cycle.\n\n"
+        "Please confirm the current blocker, the expected closure date, and any support needed from finance so the BFM team can close the item in this cycle.\n\n"
         "Regards,\nBFM Operations"
     )
     return FollowUpDraft(
         nudge=nudge,
         subject=subject,
         body=body,
-        recommended_action="Review blockers with the account manager and close billing or collection dependencies this week.",
+        recommended_action="Review blockers with the owner and close the finance dependency this week.",
     )
 
 
 @lru_cache
 def _openai_model() -> ChatOpenAI | None:
     settings = get_settings()
-    if not settings.openai_api_key:
+    issue = _openai_configuration_issue(settings)
+    if issue:
+        logger.warning("OpenAI provider unavailable: %s", issue)
         return None
     return ChatOpenAI(
         model=settings.openai_model,
         temperature=0,
         openai_api_key=settings.openai_api_key,
-        use_responses_api=True,
+        # Structured output via the Responses API emits serializer warnings in the
+        # current langchain-openai/openai stack, so keep this flow on chat
+        # completions until that path stabilizes.
+        use_responses_api=False,
     )
 
 
 @lru_cache
 def _azure_model() -> AzureChatOpenAI | None:
     settings = get_settings()
-    if not (settings.azure_openai_api_key and settings.azure_openai_endpoint and settings.azure_openai_deployment):
+    issue = _azure_configuration_issue(settings)
+    if issue:
+        logger.warning("Azure OpenAI provider unavailable: %s", issue)
         return None
     return AzureChatOpenAI(
         model=settings.azure_openai_model,
@@ -114,7 +190,7 @@ def _azure_model() -> AzureChatOpenAI | None:
         azure_endpoint=settings.azure_openai_endpoint,
         api_key=settings.azure_openai_api_key,
         temperature=0,
-        use_responses_api=True,
+        use_responses_api=False,
     )
 
 
@@ -126,7 +202,21 @@ def _model_for_provider(provider: str):
     return None
 
 
+def model_name_for_provider(provider: str) -> str:
+    settings = get_settings()
+    if provider == "openai":
+        return settings.openai_model
+    if provider == "azure_openai":
+        return settings.azure_openai_model
+    return "deterministic-demo"
+
+
 def generate_follow_up(provider: str, focus_area: str, context: dict[str, object], supporting_facts: list[str], question: str | None) -> FollowUpDraft:
+    settings = get_settings()
+    issue = _provider_configuration_issue(provider, settings)
+    if issue:
+        raise ProviderConfigurationError(issue)
+
     model = _model_for_provider(provider)
     if model is None:
         return _fallback_draft(context, supporting_facts, focus_area)
