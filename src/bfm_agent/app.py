@@ -382,6 +382,27 @@ def approve_action(payload: ActionApproveRequest, session: Session = Depends(get
     )
 
 
+@app.post("/api/actions/{notification_id}/resolve")
+def resolve_notification(notification_id: int, payload: dict[str, Any], session: Session = Depends(get_session)):
+    event = session.get(NotificationEvent, notification_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    signal = payload.get("signal", "complete")
+    body_map = {"complete": "Approved", "progress": "Will do, working on it", "none": "No response yet"}
+    body = body_map.get(signal, "Approved")
+    analytics = _analytics(session)
+    updated = analytics.apply_reply(
+        event=event,
+        body=body,
+        sender_email=event.recipient_email,
+        received_at=datetime.utcnow(),
+        message_id=f"manual-resolve-{notification_id}",
+        subject=f"Re: {event.subject}",
+    )
+    session.commit()
+    return {"status": "resolved", "signal": signal, "entity_updated": updated}
+
+
 @app.post("/api/integrations/gmail/sync", response_model=GmailSyncResponse)
 def sync_gmail(session: Session = Depends(get_session)):
     service = GmailService()

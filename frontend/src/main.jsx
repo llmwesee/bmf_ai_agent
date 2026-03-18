@@ -1,427 +1,1875 @@
-import React, { startTransition, useDeferredValue, useEffect, useState } from "react";
+import React, {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 
+// ── Formatters ───────────────────────────────────────────────────────────────
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 0,
 });
-
-const percentage = new Intl.NumberFormat("en-US", {
+const pctFmt = new Intl.NumberFormat("en-US", {
   style: "percent",
-  maximumFractionDigits: 0,
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
 });
 
-const number = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 0,
-});
+function shortMoney(v) {
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
+  return money.format(v);
+}
 
-const tabs = [
-  { id: "overview", label: "Morning Scan" },
-  { id: "revenue_realization", label: "Revenue" },
-  { id: "billing_trigger", label: "Billing" },
-  { id: "unbilled_revenue", label: "Unbilled" },
-  { id: "collection_monitoring", label: "Collections" },
-  { id: "revenue_forecasting", label: "Forecast" },
-  { id: "thresholds", label: "Controls" },
+function fmtDate(str) {
+  if (!str) return "—";
+  return new Date(str).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+const NAV = [
+  { id: "overview", label: "Financial Health", desc: "Morning Scan" },
+  { id: "revenue_realization", label: "Revenue", desc: "Realization Monitor" },
+  { id: "billing_trigger", label: "Billing Triggers", desc: "Milestone Monitor" },
+  { id: "unbilled_revenue", label: "Unbilled Revenue", desc: "Detection" },
+  { id: "collection_monitoring", label: "Collections", desc: "AR Monitor" },
+  { id: "revenue_forecasting", label: "Revenue Forecast", desc: "Projections" },
+  { id: "agent_activity", label: "Agent Activity", desc: "Audit Log" },
+  { id: "thresholds", label: "Settings", desc: "Thresholds & Controls" },
 ];
 
-function selectionKey(item) {
-  return item ? `${item.agent_key}:${item.entity_type}:${item.entity_id}` : "";
-}
+const NAV_ICONS = {
+  overview: "◉",
+  revenue_realization: "▣",
+  billing_trigger: "◫",
+  unbilled_revenue: "◷",
+  collection_monitoring: "◎",
+  revenue_forecasting: "◈",
+  agent_activity: "◌",
+  thresholds: "◧",
+};
 
-function sameSelection(left, right) {
-  return selectionKey(left) === selectionKey(right);
-}
-
-function entityLabel(item) {
-  if (!item) {
-    return "No record selected";
-  }
-  if (item.invoice_number) {
-    return item.invoice_number;
-  }
-  if (item.billing_milestone) {
-    return item.billing_milestone;
-  }
-  if (item.project_code) {
-    return item.project_code;
-  }
-  return `${item.entity_type} ${item.entity_id}`;
-}
-
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    const detail = await response.text();
-    let message = detail;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text;
     try {
-      const payload = JSON.parse(detail);
-      if (typeof payload.detail === "string") {
-        message = payload.detail;
-      }
-    } catch {
-      // Use raw text when the response is not JSON.
-    }
-    throw new Error(message || `Request failed for ${url}`);
+      const json = JSON.parse(text);
+      if (typeof json.detail === "string") msg = json.detail;
+    } catch {}
+    throw new Error(msg || `Request failed: ${url}`);
   }
-  return response.json();
+  return res.json();
 }
 
-function SummaryCard({ label, value, note }) {
+function riskCls(level) {
+  if (level === "High") return "high";
+  if (level === "Medium") return "medium";
+  return "low";
+}
+
+function selKey(ref) {
+  return ref ? `${ref.agent_key}:${ref.entity_type}:${ref.entity_id}` : "";
+}
+
+function sameSel(a, b) {
+  return selKey(a) === selKey(b);
+}
+
+function makeRef(row, agentKey) {
+  return {
+    agent_key: agentKey,
+    entity_type: row.entity_type,
+    entity_id: row.entity_id,
+  };
+}
+
+function findNudge(nudges, ref) {
+  if (!ref || !nudges) return null;
   return (
-    <article className="summary-card">
-      <p className="label">{label}</p>
-      <strong>{value}</strong>
-      <small>{note}</small>
-    </article>
+    nudges.find(
+      (n) => n.entity_id === ref.entity_id && n.entity_type === ref.entity_type
+    ) || null
   );
 }
 
-function StatusBadge({ value, type = "risk" }) {
-  return <span className={`${type}-pill ${(value || "low").toLowerCase().replace(/\s+/g, "-")}`}>{value}</span>;
+function findRow(rows, ref) {
+  if (!ref || !rows) return null;
+  return rows.find((r) => r.entity_id === ref.entity_id) || null;
 }
 
-function MetricGrid({ items }) {
+// ── Small UI Components ───────────────────────────────────────────────────────
+function RiskBadge({ level }) {
   return (
-    <div className="metric-grid">
-      {items.map((item) => (
-        <SummaryCard key={item.label} {...item} />
+    <span className={`risk-pill ${riskCls(level)}`}>{level || "—"}</span>
+  );
+}
+
+function StatusBadge({ value }) {
+  const cls = value ? value.toLowerCase().replace(/[\s/_]+/g, "-") : "";
+  return (
+    <span className={`status-pill ${cls}`}>{value || "—"}</span>
+  );
+}
+
+function KpiCard({ label, value, sub, variant, info }) {
+  return (
+    <div className={`kpi-card${variant ? ` kpi-${variant}` : ""}`}>
+      {info && (
+        <>
+          <span className="kpi-info">
+            <span className="kpi-info-icon">i</span>
+          </span>
+          {/* Tooltip is a sibling of kpi-info, positioned relative to the card */}
+          <span className="kpi-tooltip">{info}</span>
+        </>
+      )}
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value">{value}</div>
+      {sub && <div className="kpi-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function KpiGrid({ cards }) {
+  return (
+    <div className="kpi-grid">
+      {cards.map((c, i) => (
+        <KpiCard key={i} {...c} />
       ))}
     </div>
   );
 }
 
-function QueueCard({ item, active, onAnalyze, onDraft }) {
+function SectionHeader({ title, sub, right }) {
   return (
-    <article className={`queue-card ${active ? "active" : ""}`}>
-      <div className="queue-card-top">
-        <div>
-          <p className="queue-title">{item.title}</p>
-          <p className="queue-copy">{item.message}</p>
-          <small>
-            {item.account_name}
-            {item.project_code ? ` · ${item.project_code}` : ""}
-          </small>
-        </div>
-        <StatusBadge value={item.severity} />
+    <div className="section-header">
+      <div>
+        <h2 className="section-title">{title}</h2>
+        {sub && <p className="section-sub">{sub}</p>}
       </div>
-      <p className="queue-action">{item.suggested_action}</p>
-      <div className="queue-footer">
-        <span className="queue-status">{item.current_status}</span>
-        <div className="action-row">
-          <button className="button-secondary" onClick={() => onAnalyze(item)}>
-            Analyze
-          </button>
-          <button onClick={() => onDraft(item)}>Generate Draft</button>
-        </div>
-      </div>
-    </article>
+      {right && <div className="section-header-right">{right}</div>}
+    </div>
   );
 }
 
-function SimpleTable({ columns, rows, onInspect, selectedRef }) {
-  const deferredRows = useDeferredValue(rows);
+// ── Data Table ────────────────────────────────────────────────────────────────
+function DataTable({
+  columns,
+  rows,
+  onRowClick,
+  selectedRef,
+  agentKey,
+  emptyText,
+}) {
+  const deferred = useDeferredValue(rows);
   return (
     <div className="table-shell">
       <table>
         <thead>
           <tr>
-            {columns.map((column) => (
-              <th key={column.label}>{column.label}</th>
+            {columns.map((col) => (
+              <th
+                key={col.key}
+                style={col.width ? { width: col.width, minWidth: col.width } : {}}
+              >
+                {col.label}
+              </th>
             ))}
-            {onInspect ? <th></th> : null}
           </tr>
         </thead>
         <tbody>
-          {deferredRows.map((row) => {
-            const isSelected = sameSelection(selectedRef, row);
+          {deferred.map((row, i) => {
+            const risk = row.risk_level || row.collection_risk;
+            const ref = agentKey ? makeRef(row, agentKey) : null;
+            const isSelected = ref && selectedRef && sameSel(selectedRef, ref);
             return (
-              <tr key={selectionKey(row)} className={isSelected ? "selected-row" : ""}>
-                {columns.map((column) => (
-                  <td key={column.label}>{column.render ? column.render(row) : row[column.key]}</td>
-                ))}
-                {onInspect ? (
-                  <td>
-                    <button className="table-button" onClick={() => onInspect(row)}>
-                      Analyze
-                    </button>
+              <tr
+                key={row.entity_id != null ? row.entity_id : i}
+                className={[
+                  risk ? `risk-row-${risk.toLowerCase()}` : "",
+                  isSelected ? "selected-row" : "",
+                  onRowClick ? "clickable-row" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => onRowClick && onRowClick(row)}
+              >
+                {columns.map((col) => (
+                  <td key={col.key}>
+                    {col.render
+                      ? col.render(row[col.key], row)
+                      : row[col.key] ?? "—"}
                   </td>
-                ) : null}
+                ))}
               </tr>
             );
           })}
         </tbody>
       </table>
+      {deferred.length === 0 && (
+        <div className="empty-state slim">
+          <span>{emptyText || "All clear — no items found."}</span>
+        </div>
+      )}
     </div>
   );
 }
 
-function NotificationList({ items }) {
-  if (!items.length) {
-    return <div className="empty-state slim">No notifications sent yet.</div>;
-  }
-
+// ── Analysis Widget ───────────────────────────────────────────────────────────
+function AnalysisWidget({ analysis }) {
+  if (!analysis) return null;
   return (
-    <div className="notification-list">
-      {items.map((item) => (
-        <article key={item.id} className="notification-card">
-          <div className="notification-meta">
-            <StatusBadge value={item.status} type="status" />
-            <span>{item.channel}</span>
-            <span>{item.direction}</span>
-          </div>
-          <strong>{item.subject}</strong>
-          <p>{item.message_excerpt}</p>
-          <small>
-            {item.recipient_email}
-            {item.sender_email ? ` · ${item.sender_email}` : ""}
-          </small>
-        </article>
-      ))}
-    </div>
-  );
-}
+    <div className="analysis-widget">
+      <div className="aw-headline">{analysis.headline}</div>
 
-function ThresholdEditor({ thresholds, drafts, onChange, onSave, savingId }) {
-  return (
-    <div className="threshold-grid">
-      {thresholds.map((threshold) => {
-        const draft = drafts[threshold.id] ?? threshold;
-        return (
-          <article className="threshold-card" key={threshold.id}>
-            <div>
-              <p className="label">{threshold.agent_key.replaceAll("_", " ")}</p>
-              <h3>{threshold.label}</h3>
-              <p>{threshold.description}</p>
+      {analysis.why_triggered && (
+        <div className="aw-block">
+          <div className="aw-block-label">Why Triggered</div>
+          <div className="aw-block-text">{analysis.why_triggered}</div>
+        </div>
+      )}
+
+      {analysis.current_status && (
+        <div className="aw-block">
+          <div className="aw-block-label">Current Status</div>
+          <div className="aw-block-text">{analysis.current_status}</div>
+        </div>
+      )}
+
+      {analysis.recommended_action && (
+        <div className="aw-action">
+          <span className="aw-action-icon">→</span> {analysis.recommended_action}
+        </div>
+      )}
+
+      {analysis.formula_inputs && analysis.formula_inputs.length > 0 && (
+        <div className="aw-metrics">
+          {analysis.formula_inputs.slice(0, 4).map((f, i) => (
+            <div key={i} className="aw-metric">
+              <div className="aw-metric-label">{f.label}</div>
+              <div className="aw-metric-value">{f.display_value}</div>
             </div>
-            <div className="threshold-fields">
-              <label>
-                <span>Medium</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={draft.medium_value}
-                  onChange={(event) => onChange(threshold.id, "medium_value", event.target.value)}
-                />
-              </label>
-              <label>
-                <span>High</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={draft.high_value}
-                  onChange={(event) => onChange(threshold.id, "high_value", event.target.value)}
-                />
-              </label>
-              <button onClick={() => onSave(threshold.id)} disabled={savingId === threshold.id}>
-                {savingId === threshold.id ? "Saving..." : "Save threshold"}
-              </button>
-            </div>
-          </article>
-        );
-      })}
-    </div>
-  );
-}
-
-function QueueStack({ items, selectedRef, onAnalyze, onDraft, className = "" }) {
-  if (!items.length) {
-    return <div className="empty-state slim">No nudges in this view right now.</div>;
-  }
-
-  return (
-    <div className={`queue-list ${className}`.trim()}>
-      {items.map((item) => (
-        <QueueCard
-          key={item.id}
-          item={item}
-          active={sameSelection(selectedRef, item)}
-          onAnalyze={onAnalyze}
-          onDraft={onDraft}
-        />
-      ))}
-    </div>
-  );
-}
-
-function AnalysisPanel({ item, nudge, generating, onGenerateDraft }) {
-  if (!item) {
-    return (
-      <aside className="panel analysis-panel">
-        <div className="panel-header">
-          <div>
-            <p className="panel-kicker">Analyze</p>
-            <h2>Why this was triggered</h2>
-          </div>
-        </div>
-        <div className="empty-state">Select a row or nudge to review the formula inputs, threshold breaches, and status logic.</div>
-      </aside>
-    );
-  }
-
-  return (
-    <aside className="panel analysis-panel">
-      <div className="panel-header">
-        <div>
-          <p className="panel-kicker">{item.agent_key.replaceAll("_", " ")}</p>
-          <h2>
-            {item.account_name} · {entityLabel(item)}
-          </h2>
-        </div>
-        <div className="analysis-badges">
-          <StatusBadge value={item.risk_level || item.collection_risk} />
-          <StatusBadge value={item.analysis.current_status} type="status" />
-        </div>
-      </div>
-      <div className="analysis-highlight">
-        <span className="label">Why triggered</span>
-        <p>{item.analysis.why_triggered}</p>
-      </div>
-      {nudge ? (
-        <div className="analysis-highlight soft">
-          <span className="label">Priority nudge</span>
-          <p>{nudge.message}</p>
-          <small>{nudge.suggested_action}</small>
-        </div>
-      ) : null}
-      {item.analysis.confidence_display ? (
-        <div className="analysis-confidence">
-          <span className="label">Confidence</span>
-          <strong>{item.analysis.confidence_display}</strong>
-        </div>
-      ) : null}
-      <div className="analysis-section">
-        <span className="label">Formula inputs</span>
-        <div className="formula-grid">
-          {item.analysis.formula_inputs.map((metric) => (
-            <article className="formula-card" key={metric.key}>
-              <small>{metric.label}</small>
-              <strong>{metric.display_value}</strong>
-              <p>{metric.description}</p>
-            </article>
           ))}
         </div>
-      </div>
-      <div className="analysis-section">
-        <span className="label">Threshold checks</span>
-        <div className="threshold-check-list">
-          {item.analysis.threshold_checks.map((check) => (
-            <article className="threshold-check" key={check.metric_key}>
-              <div className="panel-header">
-                <strong>{check.label}</strong>
-                <StatusBadge value={check.breached_level || "Low"} />
-              </div>
-              <p>
-                Current: {check.current_display} · Medium: {check.medium_display} · High: {check.high_display}
-              </p>
-              <small>{check.description}</small>
-            </article>
-          ))}
-        </div>
-      </div>
-      <div className="analysis-section">
-        <span className="label">Calculation notes</span>
-        <ul className="analysis-list">
-          {item.analysis.calculation_notes.map((note) => (
-            <li key={note}>{note}</li>
-          ))}
-        </ul>
-      </div>
-      <button className="wide-button" onClick={onGenerateDraft} disabled={generating}>
-        {generating ? "Generating draft..." : "Generate draft"}
-      </button>
-    </aside>
-  );
-}
+      )}
 
-function DraftPanel({ item, draft, sending, generating, channel, setChannel, onGenerateDraft, onApprove }) {
-  if (!item) {
-    return (
-      <aside className="panel draft-panel">
-        <div className="panel-header">
-          <div>
-            <p className="panel-kicker">Agent Workspace</p>
-            <h2>Draft and approve actions</h2>
-          </div>
-        </div>
-        <div className="empty-state">Select a queue item or table row to prepare a follow-up action.</div>
-      </aside>
-    );
-  }
-
-  const hasDraft = draft && sameSelection(draft, item);
-
-  return (
-    <aside className="panel draft-panel">
-      <div className="panel-header">
-        <div>
-          <p className="panel-kicker">Agent Workspace</p>
-          <h2>
-            {item.account_name} · {entityLabel(item)}
-          </h2>
-        </div>
-        <StatusBadge value={item.analysis.current_status} type="status" />
-      </div>
-      {!hasDraft ? (
-        <>
-          <div className="draft-section">
-            <span className="label">Recommended action</span>
-            <p>{item.analysis.recommended_action}</p>
-          </div>
-          <div className="draft-section">
-            <span className="label">Current workspace state</span>
-            <p>Generate a follow-up draft to review the message before approval and sending.</p>
-          </div>
-          <button className="wide-button" onClick={onGenerateDraft} disabled={generating}>
-            {generating ? "Generating draft..." : "Generate draft"}
-          </button>
-        </>
-      ) : (
-        <>
-          <div className="draft-section">
-            <span className="label">Nudge</span>
-            <p>{draft.nudge}</p>
-          </div>
-          <div className="draft-section">
-            <span className="label">Subject</span>
-            <p>{draft.email_subject}</p>
-          </div>
-          <div className="draft-section">
-            <span className="label">Body</span>
-            <pre>{draft.email_body}</pre>
-          </div>
-          <div className="draft-section">
-            <span className="label">Supporting facts</span>
-            <ul className="analysis-list">
-              {draft.supporting_facts.map((fact) => (
-                <li key={fact}>{fact}</li>
+      {analysis.threshold_checks &&
+        analysis.threshold_checks.some((t) => t.breached_level) && (
+          <div className="aw-thresholds">
+            {analysis.threshold_checks
+              .filter((t) => t.breached_level)
+              .map((t, i) => (
+                <div
+                  key={i}
+                  className={`aw-threshold-row ${riskCls(t.breached_level)}`}
+                >
+                  <span>{t.label}</span>
+                  <span>
+                    {t.current_display} — <RiskBadge level={t.breached_level} />
+                  </span>
+                </div>
               ))}
-            </ul>
           </div>
-          <div className="draft-actions">
-            <label>
-              <span>Send via</span>
-              <select value={channel} onChange={(event) => setChannel(event.target.value)}>
-                <option value="mock_email">Mock email</option>
-                <option value="gmail">Gmail</option>
-              </select>
-            </label>
-            <button onClick={onApprove} disabled={sending}>
-              {sending ? "Sending..." : "Approve and send"}
-            </button>
+        )}
+
+      {analysis.confidence_display && (
+        <div className="aw-confidence">
+          <span className="aw-confidence-label">Confidence</span>
+          <span className="aw-confidence-value">{analysis.confidence_display}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Draft Widget ──────────────────────────────────────────────────────────────
+function DraftWidget({ draft, sending, channel, setChannel, onApprove }) {
+  const [body, setBody] = useState(draft?.email_body || "");
+
+  useEffect(() => {
+    setBody(draft?.email_body || "");
+  }, [draft?.email_body]);
+
+  if (!draft) return null;
+
+  return (
+    <div className="draft-widget">
+      <div className="dw-header">
+        <div className="dw-header-label">AI Draft</div>
+        {draft.risk_level && <RiskBadge level={draft.risk_level} />}
+      </div>
+
+      {draft.nudge && <div className="dw-nudge">{draft.nudge}</div>}
+
+      <div className="dw-field">
+        <label className="dw-field-label">Subject</label>
+        <div className="dw-subject">{draft.email_subject || "—"}</div>
+      </div>
+
+      <div className="dw-field">
+        <label className="dw-field-label">Message (editable)</label>
+        <textarea
+          className="dw-body"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={7}
+        />
+      </div>
+
+      {draft.supporting_facts && draft.supporting_facts.length > 0 && (
+        <div className="dw-facts">
+          <div className="dw-field-label">Supporting Facts</div>
+          <ul className="dw-facts-list">
+            {draft.supporting_facts.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="dw-channel-row">
+        <label className="dw-field-label">Send via</label>
+        <select
+          className="dw-select"
+          value={channel}
+          onChange={(e) => setChannel(e.target.value)}
+        >
+          <option value="mock_email">Mock Email (Demo)</option>
+          <option value="gmail">Gmail</option>
+        </select>
+      </div>
+
+      <button
+        className="btn-primary dw-approve-btn"
+        onClick={() => onApprove && onApprove(body)}
+        disabled={sending}
+      >
+        {sending ? "Sending…" : "✓ Approve & Send"}
+      </button>
+    </div>
+  );
+}
+
+// ── Draft Modal ────────────────────────────────────────────────────────────────
+function DraftModal({ open, draft, draftLoading, sending, channel, setChannel, onApprove, onClose }) {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="modal-title">AI Draft — Review &amp; Send</span>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        {draftLoading ? (
+          <div className="ai-generating modal-loading">
+            <div className="ai-spinner" />
+            <span>AI is analyzing…</span>
           </div>
-          {draft.trace_url ? (
-            <a className="trace-link" href={draft.trace_url} rel="noreferrer" target="_blank">
-              Open Langfuse trace
-            </a>
-          ) : null}
-        </>
+        ) : (
+          <DraftWidget
+            draft={draft}
+            sending={sending}
+            channel={channel}
+            setChannel={setChannel}
+            onApprove={onApprove}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── AI Panel ──────────────────────────────────────────────────────────────────
+function AiPanel({
+  panelItems,
+  selectedRef,
+  onNudgeSelect,
+  sectionRows,
+  draft,
+  draftLoading,
+  onGenerate,
+  showNudgeQueue,
+}) {
+  const selectedRow =
+    sectionRows && selectedRef ? findRow(sectionRows, selectedRef) : null;
+  const nudge =
+    panelItems && selectedRef ? findNudge(panelItems, selectedRef) : null;
+  const hasDraft =
+    draft && selectedRef && sameSel(draft, selectedRef);
+
+  // ── Overview: Nudge Queue mode ──────────────────────────────────────────────
+  if (showNudgeQueue) {
+    return (
+      <aside className="ai-panel">
+        <div className="ai-panel-header">
+          <span className="ai-panel-title">Agent Alerts</span>
+          {panelItems && panelItems.length > 0 && (
+            <span className="ai-panel-count">{panelItems.length}</span>
+          )}
+        </div>
+
+        {(!panelItems || panelItems.length === 0) && (
+          <div className="ai-empty">
+            <div className="ai-empty-icon">✓</div>
+            <div className="ai-empty-text">
+              All accounts on track. No action required today.
+            </div>
+          </div>
+        )}
+
+        <div className="nudge-list">
+          {(panelItems || []).map((n) => {
+            const ref = {
+              agent_key: n.agent_key,
+              entity_type: n.entity_type,
+              entity_id: n.entity_id,
+            };
+            const isActive = selectedRef && sameSel(selectedRef, ref);
+            return (
+              <div
+                key={n.id}
+                className={`nudge-card severity-${riskCls(n.severity)}${isActive ? " active" : ""}`}
+              >
+                <div className="nc-top">
+                  <div className="nc-account">{n.account_name}</div>
+                  <RiskBadge level={n.severity} />
+                </div>
+                <div className="nc-title">{n.title}</div>
+                <div className="nc-message">{n.message}</div>
+                {n.suggested_action && (
+                  <div className="nc-action">→ {n.suggested_action}</div>
+                )}
+                <div className="nc-buttons">
+                  <button
+                    className="btn-sm btn-primary"
+                    onClick={() => onNudgeSelect(ref)}
+                    disabled={draftLoading}
+                  >
+                    {isActive && hasDraft ? "Regenerate" : "Analyze & Draft"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {draftLoading && (
+          <div className="ai-generating">
+            <div className="ai-spinner" />
+            <span>AI is analyzing…</span>
+          </div>
+        )}
+
+      </aside>
+    );
+  }
+
+  // ── Module: Detail / Entity mode ────────────────────────────────────────────
+  return (
+    <aside className="ai-panel">
+      {!selectedRow ? (
+        <div className="ai-empty">
+          <div className="ai-empty-icon">◉</div>
+          <div className="ai-empty-text">
+            Select a row from the table to review details and generate an AI action draft.
+          </div>
+          {panelItems && panelItems.length > 0 && (
+            <div className="ai-section-nudges">
+              <div className="ai-nudges-label">
+                Open Alerts ({panelItems.length})
+              </div>
+              {panelItems.slice(0, 4).map((n) => (
+                <div
+                  key={n.id}
+                  className={`mini-nudge severity-${riskCls(n.severity)}`}
+                >
+                  <RiskBadge level={n.severity} />
+                  <span>
+                    {n.account_name} — {n.title}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="detail-panel">
+          <div className="dp-header">
+            <div>
+              <div className="dp-account">{selectedRow.account_name}</div>
+              <div className="dp-project">
+                {selectedRow.project_code || selectedRow.invoice_number || ""}
+              </div>
+            </div>
+            <RiskBadge
+              level={selectedRow.risk_level || selectedRow.collection_risk}
+            />
+          </div>
+
+          {nudge && (
+            <div className="dp-nudge-block">
+              <div className="dp-nudge-title">{nudge.title}</div>
+              <div className="dp-nudge-msg">{nudge.message}</div>
+              {nudge.suggested_action && (
+                <div className="dp-nudge-action">→ {nudge.suggested_action}</div>
+              )}
+            </div>
+          )}
+
+          {selectedRow.analysis && (
+            <AnalysisWidget analysis={selectedRow.analysis} />
+          )}
+
+          <button
+            className="btn-primary dp-generate-btn"
+            onClick={() => onGenerate()}
+            disabled={draftLoading}
+          >
+            {draftLoading ? "Generating Draft…" : hasDraft ? "↻ Regenerate Draft" : "Generate AI Draft"}
+          </button>
+
+          {draftLoading && (
+            <div className="ai-generating">
+              <div className="ai-spinner" />
+              <span>AI is drafting…</span>
+            </div>
+          )}
+        </div>
       )}
     </aside>
   );
 }
 
+// ── Overview Page ─────────────────────────────────────────────────────────────
+function OverviewPage({
+  dashboard,
+  selectedRef,
+  onNudgeSelect,
+  draft,
+  draftLoading,
+  sending,
+  channel,
+  setChannel,
+  onGenerate,
+  onApprove,
+}) {
+  const ov = dashboard.overview;
+  const narrative = dashboard.narrative;
+  const queue = dashboard.queue || [];
+  const completionPct =
+    ov.revenue_plan > 0 ? ov.revenue_recognized / ov.revenue_plan : 0;
+  const gap = ov.revenue_forecast - ov.revenue_plan;
+
+  const kpis = [
+    {
+      label: "Revenue Recognized",
+      value: shortMoney(ov.revenue_recognized),
+      sub: `of ${shortMoney(ov.revenue_plan)} plan · ${pctFmt.format(completionPct)}`,
+      variant: completionPct < 0.8 ? "danger" : completionPct < 0.95 ? "warning" : "success",
+      info: "Total revenue earned and booked across all projects this month. Completion % = Recognized ÷ Plan.",
+    },
+    {
+      label: "Revenue Forecast",
+      value: shortMoney(ov.revenue_forecast),
+      sub: `Gap: ${gap >= 0 ? "+" : ""}${shortMoney(gap)}`,
+      variant: gap < 0 ? "danger" : "success",
+      info: "= Σ (Recognized + trend + milestone + pipeline) across all projects.\n• Trend = 7-day burn × remaining weeks\n• Milestone = 10% of pending billable\n• Pipeline = 20% of near-term pipeline",
+    },
+    {
+      label: "Invoices Generated",
+      value: ov.invoices_generated.toLocaleString(),
+      sub: "This period",
+      variant: "neutral",
+      info: "Total count of invoices created across all projects in the current period.",
+    },
+    {
+      label: "Unbilled Revenue",
+      value: shortMoney(ov.unbilled_revenue),
+      sub: "Recognized, not billed",
+      variant: ov.unbilled_revenue > 200_000 ? "warning" : "neutral",
+      info: "= Σ max(Revenue Recognized − Revenue Billed, 0) per project. Revenue that is earned and booked but no invoice has been raised yet.",
+    },
+    {
+      label: "Outstanding AR",
+      value: shortMoney(ov.outstanding_receivables),
+      sub: "Pending collection",
+      variant: ov.outstanding_receivables > 500_000 ? "warning" : "neutral",
+      info: "= Σ max(Invoice Amount − Amount Received, 0) across all open invoices. Total unpaid balance pending collection.",
+    },
+    {
+      label: "Revenue at Risk",
+      value: shortMoney(ov.revenue_at_risk),
+      sub: "High-risk exposure",
+      variant: ov.revenue_at_risk > 300_000 ? "danger" : "warning",
+      info: "= Σ max(Revenue Plan − Revenue Forecast, 0) per project. Measures the total shortfall for all projects where forecast is below plan.",
+    },
+  ];
+
+  // At-risk rows from revenue section (high + medium, sorted by risk)
+  const atRiskRows = (dashboard.revenue_realization?.rows || [])
+    .filter((r) => r.risk_level === "High" || r.risk_level === "Medium")
+    .sort((a, b) => {
+      const order = { High: 0, Medium: 1, Low: 2 };
+      return order[a.risk_level] - order[b.risk_level];
+    })
+    .slice(0, 12);
+
+  const atRiskCols = [
+    { key: "account_name", label: "Account" },
+    { key: "project_code", label: "Project" },
+    {
+      key: "revenue_gap",
+      label: "Rev. Gap",
+      render: (v) => (
+        <span style={{ color: v < 0 ? "var(--danger)" : "inherit" }}>
+          {shortMoney(v)}
+        </span>
+      ),
+    },
+    {
+      key: "unbilled_amount",
+      label: "Unbilled",
+      render: (v) => shortMoney(v || 0),
+    },
+    {
+      key: "outstanding_collection",
+      label: "Overdue AR",
+      render: (v) => shortMoney(v || 0),
+    },
+    {
+      key: "risk_level",
+      label: "Risk",
+      render: (v) => <RiskBadge level={v} />,
+    },
+  ];
+
+  return (
+    <div className="overview-layout">
+      <KpiGrid cards={kpis} />
+
+      <div className="overview-body">
+        <div className="overview-main">
+          {/* Morning narrative */}
+          <div className="panel narrative-panel">
+            <div className="panel-kicker">Morning Report</div>
+            <div className="narrative-headline">{narrative.headline}</div>
+            <p className="narrative-copy">{narrative.narrative}</p>
+
+            {narrative.top_accounts && narrative.top_accounts.length > 0 && (
+              <div className="narrative-accounts">
+                <div className="narrative-accounts-title">
+                  Top Accounts Needing Attention
+                </div>
+                {narrative.top_accounts.slice(0, 5).map((acc, i) => (
+                  <div key={i} className="na-row">
+                    <span className="na-name">{acc.account_name}</span>
+                    <div className="na-metrics">
+                      <span className="na-metric">
+                        Gap:{" "}
+                        <strong
+                          style={{
+                            color:
+                              Number(acc.forecast_gap) < 0
+                                ? "var(--danger)"
+                                : "var(--success)",
+                          }}
+                        >
+                          {shortMoney(Number(acc.forecast_gap))}
+                        </strong>
+                      </span>
+                      {Number(acc.unbilled_revenue) > 0 && (
+                        <span className="na-metric">
+                          Unbilled:{" "}
+                          <strong>
+                            {shortMoney(Number(acc.unbilled_revenue))}
+                          </strong>
+                        </span>
+                      )}
+                      {Number(acc.overdue_amount) > 0 && (
+                        <span className="na-metric">
+                          Overdue:{" "}
+                          <strong>
+                            {shortMoney(Number(acc.overdue_amount))}
+                          </strong>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* At-risk accounts table */}
+          <div className="panel">
+            <SectionHeader
+              title="Accounts at Risk"
+              sub={`${atRiskRows.length} projects flagged as Medium or High risk`}
+            />
+            <DataTable
+              columns={atRiskCols}
+              rows={atRiskRows}
+              emptyText="✓ All accounts are on track. No action required."
+            />
+          </div>
+        </div>
+
+        <AiPanel
+          panelItems={queue}
+          selectedRef={selectedRef}
+          onNudgeSelect={onNudgeSelect}
+          draft={draft}
+          draftLoading={draftLoading}
+          sending={sending}
+          channel={channel}
+          setChannel={setChannel}
+          onGenerate={onGenerate}
+          onApprove={onApprove}
+          showNudgeQueue={true}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Revenue Page ──────────────────────────────────────────────────────────────
+function RevenuePage({
+  section,
+  selectedRef,
+  onRowClick,
+  draft,
+  draftLoading,
+  sending,
+  channel,
+  setChannel,
+  onGenerate,
+  onApprove,
+}) {
+  const s = section.summary;
+  const kpis = [
+    { label: "Revenue Plan", value: shortMoney(s.revenue_plan), variant: "neutral", info: "Monthly revenue target set for this project in the contract. Used as the baseline for gap and completion calculations." },
+    {
+      label: "Revenue Recognized",
+      value: shortMoney(s.revenue_recognized),
+      sub: pctFmt.format(s.revenue_completion_pct) + " complete",
+      variant: s.revenue_completion_pct < 0.8 ? "danger" : "success",
+      info: "Revenue earned and booked this month. Completion % = Recognized ÷ Plan. Flags danger below 80%.",
+    },
+    {
+      label: "Revenue Remaining",
+      value: shortMoney(s.revenue_remaining),
+      variant: "neutral",
+      info: "= max(Revenue Plan − Revenue Recognized, 0). Amount still needed to hit the monthly plan.",
+    },
+    {
+      label: "Forecast",
+      value: shortMoney(s.revenue_forecast),
+      variant: s.revenue_gap < 0 ? "warning" : "success",
+      info: "= Recognized + trend (7-day burn × remaining weeks) + milestone (10% of pending billable) + pipeline (20% of near-term pipeline). Capped at contract value.",
+    },
+    {
+      label: "Forecast Gap",
+      value: shortMoney(s.revenue_gap),
+      variant: s.revenue_gap < 0 ? "danger" : "success",
+      info: "= Revenue Forecast − Revenue Plan. Negative value means the project is projected to miss its monthly target.",
+    },
+  ];
+
+  const columns = [
+    { key: "account_name", label: "Account" },
+    { key: "project_code", label: "Project" },
+    { key: "delivery_unit", label: "Delivery Unit" },
+    { key: "account_manager", label: "Manager" },
+    { key: "revenue_plan", label: "Plan", render: (v) => shortMoney(v) },
+    { key: "revenue_recognized", label: "Recognized", render: (v) => shortMoney(v) },
+    {
+      key: "revenue_gap",
+      label: "Gap",
+      render: (v) => (
+        <span style={{ color: v < 0 ? "var(--danger)" : "var(--success)" }}>
+          {shortMoney(v)}
+        </span>
+      ),
+    },
+    {
+      key: "revenue_completion_pct",
+      label: "% Done",
+      render: (v) => pctFmt.format(v),
+    },
+    {
+      key: "revenue_burn_rate",
+      label: "Burn Rate",
+      render: (v) => shortMoney(v) + "/wk",
+    },
+    { key: "risk_level", label: "Risk", render: (v) => <RiskBadge level={v} /> },
+  ];
+
+  return (
+    <div className="module-layout">
+      <div className="module-main">
+        <KpiGrid cards={kpis} />
+        <div className="panel table-panel">
+          <SectionHeader
+            title="Revenue Realization"
+            sub="Project-level revenue monitoring"
+            right={
+              <span className="table-count">{section.rows.length} projects</span>
+            }
+          />
+          <DataTable
+            columns={columns}
+            rows={section.rows}
+            onRowClick={onRowClick}
+            selectedRef={selectedRef}
+            agentKey="revenue_realization"
+          />
+        </div>
+      </div>
+      <div className="module-sidebar">
+        <AiPanel
+          panelItems={section.nudges}
+          selectedRef={selectedRef}
+          sectionRows={section.rows}
+          draft={draft}
+          draftLoading={draftLoading}
+          sending={sending}
+          channel={channel}
+          setChannel={setChannel}
+          onGenerate={onGenerate}
+          onApprove={onApprove}
+          showNudgeQueue={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Billing Page ──────────────────────────────────────────────────────────────
+function BillingPage({
+  section,
+  selectedRef,
+  onRowClick,
+  draft,
+  draftLoading,
+  sending,
+  channel,
+  setChannel,
+  onGenerate,
+  onApprove,
+}) {
+  const s = section.summary;
+  const kpis = [
+    { label: "Billable Amount", value: shortMoney(s.billable_amount), variant: "neutral", info: "Total value of completed milestones eligible for invoicing. = Σ billable_amount across approved milestones." },
+    {
+      label: "Invoices Generated",
+      value: s.invoices_generated.toLocaleString(),
+      variant: "neutral",
+      info: "Count of invoices successfully created for completed milestones in this period.",
+    },
+    {
+      label: "Invoices Pending",
+      value: s.invoices_pending.toLocaleString(),
+      variant: s.invoices_pending > 5 ? "warning" : "neutral",
+      info: "Count of completed milestones where an invoice has not yet been created. Each pending milestone delays cash flow.",
+    },
+    {
+      label: "Unbilled Revenue",
+      value: shortMoney(s.unbilled_revenue),
+      variant: s.unbilled_revenue > 100_000 ? "danger" : "warning",
+      info: "= Σ max(Billable Amount − Billed Amount, 0) per milestone. Work is done and billable, but the invoice hasn't been raised.",
+    },
+    {
+      label: "Avg Billing Delay",
+      value: `${s.average_billing_delay.toFixed(0)}d`,
+      sub: "Average days delayed",
+      variant: s.average_billing_delay > 7 ? "warning" : "neutral",
+      info: "= Average (Invoice Date − Milestone Completion Date) in days, across invoiced milestones. High delay signals slow billing turnaround.",
+    },
+    {
+      label: "Billing Risk",
+      value: shortMoney(s.billing_risk_amount),
+      variant: "danger",
+      info: "Total unbilled amount on milestones flagged as High risk — completed but not invoiced beyond the threshold.",
+    },
+  ];
+
+  const columns = [
+    { key: "account_name", label: "Account" },
+    { key: "project_code", label: "Project" },
+    { key: "billing_milestone", label: "Milestone" },
+    { key: "billing_type", label: "Type" },
+    {
+      key: "milestone_completion_date",
+      label: "Completed",
+      render: (v) => fmtDate(v),
+    },
+    {
+      key: "billable_amount",
+      label: "Billable",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "invoice_generated",
+      label: "Invoiced",
+      render: (v) =>
+        v ? (
+          <StatusBadge value="Yes" />
+        ) : (
+          <StatusBadge value="No" />
+        ),
+    },
+    {
+      key: "billing_delay_days",
+      label: "Delay",
+      render: (v) => (
+        <span
+          style={{
+            color:
+              v > 15
+                ? "var(--danger)"
+                : v > 7
+                ? "var(--warning)"
+                : "inherit",
+          }}
+        >
+          {v}d
+        </span>
+      ),
+    },
+    {
+      key: "billing_status",
+      label: "Status",
+      render: (v) => <StatusBadge value={v} />,
+    },
+    {
+      key: "risk_level",
+      label: "Risk",
+      render: (v) => <RiskBadge level={v} />,
+    },
+  ];
+
+  return (
+    <div className="module-layout">
+      <div className="module-main">
+        <KpiGrid cards={kpis} />
+        <div className="panel table-panel">
+          <SectionHeader
+            title="Billing Trigger Monitor"
+            sub="Milestone-level billing tracking"
+            right={
+              <span className="table-count">{section.rows.length} milestones</span>
+            }
+          />
+          <DataTable
+            columns={columns}
+            rows={section.rows}
+            onRowClick={onRowClick}
+            selectedRef={selectedRef}
+            agentKey="billing_trigger"
+          />
+        </div>
+      </div>
+      <div className="module-sidebar">
+        <AiPanel
+          panelItems={section.nudges}
+          selectedRef={selectedRef}
+          sectionRows={section.rows}
+          draft={draft}
+          draftLoading={draftLoading}
+          sending={sending}
+          channel={channel}
+          setChannel={setChannel}
+          onGenerate={onGenerate}
+          onApprove={onApprove}
+          showNudgeQueue={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Unbilled Page ─────────────────────────────────────────────────────────────
+function UnbilledPage({
+  section,
+  selectedRef,
+  onRowClick,
+  draft,
+  draftLoading,
+  sending,
+  channel,
+  setChannel,
+  onGenerate,
+  onApprove,
+}) {
+  const s = section.summary;
+  const kpis = [
+    {
+      label: "Total Recognized",
+      value: shortMoney(s.total_revenue_recognized),
+      variant: "neutral",
+      info: "Total revenue earned and booked across all projects. This is the starting point — anything recognized but not invoiced appears as Unbilled.",
+    },
+    {
+      label: "Total Billed",
+      value: shortMoney(s.total_revenue_billed),
+      variant: "neutral",
+      info: "Sum of all invoice amounts raised against recognized revenue. Compare to Total Recognized to see the billing gap.",
+    },
+    {
+      label: "Total Unbilled",
+      value: shortMoney(s.total_unbilled_revenue),
+      variant: s.total_unbilled_revenue > 200_000 ? "danger" : "warning",
+      info: "= Σ max(Revenue Recognized − Revenue Billed, 0) per project. Revenue booked in P&L but not yet converted to an invoice.",
+    },
+    {
+      label: "Avg Days Unbilled",
+      value: `${s.average_days_unbilled.toFixed(0)}d`,
+      variant: s.average_days_unbilled > 10 ? "warning" : "neutral",
+      info: "Average age of the oldest pending billable milestone per project (today − milestone completion date). High values increase cash-flow risk.",
+    },
+    {
+      label: "High Risk Unbilled",
+      value: shortMoney(s.high_risk_unbilled_revenue),
+      variant: "danger",
+      info: "Unbilled revenue on projects whose aging exceeds the High-risk threshold. These need immediate billing action.",
+    },
+  ];
+
+  const columns = [
+    { key: "account_name", label: "Account" },
+    { key: "project_code", label: "Project" },
+    { key: "delivery_unit", label: "Delivery Unit" },
+    { key: "account_manager", label: "Manager" },
+    {
+      key: "revenue_recognized",
+      label: "Recognized",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "revenue_billed",
+      label: "Billed",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "unbilled_revenue",
+      label: "Unbilled",
+      render: (v) => (
+        <strong
+          style={{ color: v > 50_000 ? "var(--danger)" : "inherit" }}
+        >
+          {shortMoney(v)}
+        </strong>
+      ),
+    },
+    {
+      key: "days_unbilled",
+      label: "Days Unbilled",
+      render: (v) => (
+        <span
+          style={{ color: v > 10 ? "var(--warning)" : "inherit" }}
+        >
+          {v}d
+        </span>
+      ),
+    },
+    { key: "billing_owner", label: "Billing Owner" },
+    {
+      key: "risk_level",
+      label: "Risk",
+      render: (v) => <RiskBadge level={v} />,
+    },
+  ];
+
+  return (
+    <div className="module-layout">
+      <div className="module-main">
+        <KpiGrid cards={kpis} />
+        <div className="panel table-panel">
+          <SectionHeader
+            title="Unbilled Revenue Detection"
+            sub="Revenue recognized but not yet invoiced"
+            right={
+              <span className="table-count">{section.rows.length} projects</span>
+            }
+          />
+          <DataTable
+            columns={columns}
+            rows={section.rows}
+            onRowClick={onRowClick}
+            selectedRef={selectedRef}
+            agentKey="unbilled_revenue"
+          />
+        </div>
+      </div>
+      <div className="module-sidebar">
+        <AiPanel
+          panelItems={section.nudges}
+          selectedRef={selectedRef}
+          sectionRows={section.rows}
+          draft={draft}
+          draftLoading={draftLoading}
+          sending={sending}
+          channel={channel}
+          setChannel={setChannel}
+          onGenerate={onGenerate}
+          onApprove={onApprove}
+          showNudgeQueue={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Collections Page ──────────────────────────────────────────────────────────
+function CollectionsPage({
+  section,
+  selectedRef,
+  onRowClick,
+  draft,
+  draftLoading,
+  sending,
+  channel,
+  setChannel,
+  onGenerate,
+  onApprove,
+}) {
+  const s = section.summary;
+  const kpis = [
+    { label: "Total Invoiced", value: shortMoney(s.total_invoiced), variant: "neutral", info: "Total value of invoices sent to clients in this period. This is the gross billing base used for DSO and collection rate calculations." },
+    {
+      label: "Total Collected",
+      value: shortMoney(s.total_collected),
+      variant: "success",
+      info: "Sum of all payments received against invoices in this period. Collection rate = Collected ÷ Invoiced.",
+    },
+    {
+      label: "Outstanding AR",
+      value: shortMoney(s.outstanding_receivables),
+      variant: s.outstanding_receivables > 400_000 ? "warning" : "neutral",
+      info: "= Σ max(Invoice Amount − Amount Received, 0) across all open invoices. Total unpaid balance still pending collection.",
+    },
+    {
+      label: "DSO",
+      value: `${s.dso.toFixed(0)}d`,
+      sub: "Days Sales Outstanding",
+      variant: s.dso > 45 ? "danger" : s.dso > 30 ? "warning" : "success",
+      info: "= (Outstanding AR ÷ Total Invoiced) × Days in period. Measures how quickly invoices are collected. Lower is better. >30d = warning, >45d = high risk.",
+    },
+    {
+      label: "Overdue Amount",
+      value: shortMoney(s.overdue_amount),
+      variant: s.overdue_amount > 100_000 ? "danger" : "warning",
+      info: "= Σ max(Invoice Amount − Amount Received, 0) for invoices past their payment due date. Signals collection follow-up needed.",
+    },
+    {
+      label: "High Risk Receivables",
+      value: `${s.high_risk_receivables.toFixed(0)}`,
+      sub: "accounts",
+      variant: "danger",
+      info: "Count of invoices overdue beyond the High-risk threshold. Each represents an escalation-level collection risk.",
+    },
+  ];
+
+  const columns = [
+    { key: "account_name", label: "Account" },
+    { key: "invoice_number", label: "Invoice #" },
+    { key: "project_code", label: "Project" },
+    {
+      key: "invoice_amount",
+      label: "Invoice Amt",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "invoice_date",
+      label: "Invoice Date",
+      render: (v) => fmtDate(v),
+    },
+    {
+      key: "payment_due_date",
+      label: "Due Date",
+      render: (v) => fmtDate(v),
+    },
+    {
+      key: "amount_received",
+      label: "Collected",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "outstanding_balance",
+      label: "Outstanding",
+      render: (v) => (
+        <strong style={{ color: v > 0 ? "var(--warning)" : "inherit" }}>
+          {shortMoney(v)}
+        </strong>
+      ),
+    },
+    {
+      key: "overdue_days",
+      label: "Overdue",
+      render: (v) =>
+        v > 0 ? (
+          <span
+            style={{
+              color: v > 30 ? "var(--danger)" : "var(--warning)",
+            }}
+          >
+            {v}d
+          </span>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "collection_risk",
+      label: "Risk",
+      render: (v) => <RiskBadge level={v} />,
+    },
+    {
+      key: "collection_status",
+      label: "Status",
+      render: (v) => <StatusBadge value={v} />,
+    },
+  ];
+
+  return (
+    <div className="module-layout">
+      <div className="module-main">
+        <KpiGrid cards={kpis} />
+        <div className="panel table-panel">
+          <SectionHeader
+            title="Collection Monitoring"
+            sub="Invoice-level AR tracking and collection status"
+            right={
+              <span className="table-count">{section.rows.length} invoices</span>
+            }
+          />
+          <DataTable
+            columns={columns}
+            rows={section.rows}
+            onRowClick={onRowClick}
+            selectedRef={selectedRef}
+            agentKey="collection_monitoring"
+          />
+        </div>
+      </div>
+      <div className="module-sidebar">
+        <AiPanel
+          panelItems={section.nudges}
+          selectedRef={selectedRef}
+          sectionRows={section.rows}
+          draft={draft}
+          draftLoading={draftLoading}
+          sending={sending}
+          channel={channel}
+          setChannel={setChannel}
+          onGenerate={onGenerate}
+          onApprove={onApprove}
+          showNudgeQueue={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Forecast Page ─────────────────────────────────────────────────────────────
+function ForecastPage({
+  section,
+  selectedRef,
+  onRowClick,
+  draft,
+  draftLoading,
+  sending,
+  channel,
+  setChannel,
+  onGenerate,
+  onApprove,
+}) {
+  const s = section.summary;
+  const kpis = [
+    { label: "Revenue Plan", value: shortMoney(s.revenue_plan), variant: "neutral", info: "Aggregate monthly revenue target across all projects. Set from contract values and used as the benchmark for gap and confidence calculations." },
+    {
+      label: "Revenue Recognized",
+      value: shortMoney(s.revenue_recognized),
+      variant: "neutral",
+      info: "Total revenue earned and booked across all projects this month. This is the confirmed baseline — the forecast builds on top of this.",
+    },
+    {
+      label: "Forecast",
+      value: shortMoney(s.revenue_forecast),
+      variant: s.revenue_gap < 0 ? "warning" : "success",
+      info: "= Recognized + trend + milestone + pipeline, capped at contract value.\n• Trend = 7-day burn rate × remaining weeks × forecast bias\n• Milestone = 10% of pending billable amount\n• Pipeline = 20% of near-term pipeline",
+    },
+    {
+      label: "Forecast Gap",
+      value: shortMoney(s.revenue_gap),
+      variant: s.revenue_gap < 0 ? "danger" : "success",
+      info: "= Revenue Forecast − Revenue Plan. Negative means the portfolio is projected to fall short of its monthly target.",
+    },
+    {
+      label: "Confidence",
+      value: pctFmt.format(s.forecast_confidence_score),
+      variant: s.forecast_confidence_score < 0.6 ? "warning" : "success",
+      info: "Base 92%.\n− up to 25% for stale revenue updates\n− up to 18% for high unbilled exposure\n− up to 22% for large forecast gap\n+ up to 12% for strong recognition pace\nClamped to 55%–96%.",
+    },
+  ];
+
+  // Bar chart for top 8 projects
+  const chartRows = section.rows.slice(0, 8);
+  const maxVal = Math.max(
+    ...chartRows.flatMap((r) => [r.revenue_plan, r.revenue_forecast]),
+    1
+  );
+
+  const columns = [
+    { key: "account_name", label: "Account" },
+    { key: "project_code", label: "Project" },
+    { key: "delivery_unit", label: "Delivery Unit" },
+    { key: "revenue_plan", label: "Plan", render: (v) => shortMoney(v) },
+    {
+      key: "revenue_recognized",
+      label: "Recognized",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "revenue_forecast",
+      label: "Forecast",
+      render: (v) => shortMoney(v),
+    },
+    {
+      key: "revenue_gap",
+      label: "Gap",
+      render: (v) => (
+        <span style={{ color: v < 0 ? "var(--danger)" : "var(--success)" }}>
+          {shortMoney(v)}
+        </span>
+      ),
+    },
+    {
+      key: "forecast_confidence",
+      label: "Confidence",
+      render: (v) => pctFmt.format(v),
+    },
+    {
+      key: "risk_level",
+      label: "Risk",
+      render: (v) => <RiskBadge level={v} />,
+    },
+  ];
+
+  return (
+    <div className="module-layout">
+      <div className="module-main">
+        <KpiGrid cards={kpis} />
+
+        {/* Visual bar chart */}
+        {chartRows.length > 0 && (
+          <div className="panel forecast-chart-panel">
+            <div className="panel-kicker">Revenue Forecast vs Plan (Top Projects)</div>
+            <div className="forecast-chart">
+              {chartRows.map((r) => {
+                const planW = (r.revenue_plan / maxVal) * 100;
+                const recW = (r.revenue_recognized / maxVal) * 100;
+                const fcW = (r.revenue_forecast / maxVal) * 100;
+                return (
+                  <div key={r.entity_id} className="fc-row">
+                    <div className="fc-label">
+                      <span className="fc-code">{r.project_code}</span>
+                      <span className="fc-account-name">{r.account_name}</span>
+                    </div>
+                    <div className="fc-bars">
+                      <div className="fc-bar-group">
+                        <div
+                          className="fc-bar fc-plan"
+                          style={{ width: `${planW}%` }}
+                          title={`Plan: ${shortMoney(r.revenue_plan)}`}
+                        />
+                      </div>
+                      <div className="fc-bar-group">
+                        <div
+                          className="fc-bar fc-recognized"
+                          style={{ width: `${recW}%` }}
+                          title={`Recognized: ${shortMoney(r.revenue_recognized)}`}
+                        />
+                      </div>
+                      <div className="fc-bar-group">
+                        <div
+                          className="fc-bar fc-forecast"
+                          style={{ width: `${fcW}%` }}
+                          title={`Forecast: ${shortMoney(r.revenue_forecast)}`}
+                        />
+                      </div>
+                    </div>
+                    <div className="fc-value">{shortMoney(r.revenue_forecast)}</div>
+                  </div>
+                );
+              })}
+              <div className="fc-legend">
+                <span className="fcl-item">
+                  <span className="fcl-dot fcl-plan" />Plan
+                </span>
+                <span className="fcl-item">
+                  <span className="fcl-dot fcl-recognized" />Recognized
+                </span>
+                <span className="fcl-item">
+                  <span className="fcl-dot fcl-forecast" />Forecast
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="panel table-panel">
+          <SectionHeader
+            title="Project Forecast Detail"
+            sub="Revenue projections with confidence scoring"
+            right={
+              <span className="table-count">{section.rows.length} projects</span>
+            }
+          />
+          <DataTable
+            columns={columns}
+            rows={section.rows}
+            onRowClick={onRowClick}
+            selectedRef={selectedRef}
+            agentKey="revenue_forecasting"
+          />
+        </div>
+      </div>
+      <div className="module-sidebar">
+        <AiPanel
+          panelItems={section.nudges}
+          selectedRef={selectedRef}
+          sectionRows={section.rows}
+          draft={draft}
+          draftLoading={draftLoading}
+          sending={sending}
+          channel={channel}
+          setChannel={setChannel}
+          onGenerate={onGenerate}
+          onApprove={onApprove}
+          showNudgeQueue={false}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Pending Approval Card ──────────────────────────────────────────────────────
+const AREA_LABEL = {
+  revenue_realization: "Revenue",
+  billing_trigger: "Billing",
+  unbilled_revenue: "Unbilled",
+  collection_monitoring: "Collections",
+  revenue_forecasting: "Forecast",
+};
+
+function PendingApprovalCard({ notification, onResolve }) {
+  const [signal, setSignal] = useState("complete");
+  const [resolving, setResolving] = useState(false);
+
+  async function handleResolve() {
+    setResolving(true);
+    await onResolve(notification.id, signal);
+    setResolving(false);
+  }
+
+  return (
+    <div className="pending-card">
+      <div className="pc-top">
+        <span className="area-tag">{AREA_LABEL[notification.agent_key] || notification.agent_key}</span>
+        <span className="type-tag">{notification.entity_type}</span>
+        <span className="dir-tag dir-outbound">Awaiting Reply</span>
+      </div>
+      <div className="pc-subject">{notification.subject}</div>
+      <div className="pc-meta">
+        To: {notification.recipient_email} · {notification.channel} · {fmtDate(notification.sent_at || notification.created_at)}
+      </div>
+      <div className="pc-actions">
+        <select
+          className="pc-signal-select"
+          value={signal}
+          onChange={(e) => setSignal(e.target.value)}
+        >
+          <option value="complete">Approved / Completed</option>
+          <option value="progress">In Progress</option>
+          <option value="none">No Response</option>
+        </select>
+        <button
+          className="btn-primary pc-resolve-btn"
+          onClick={handleResolve}
+          disabled={resolving}
+        >
+          {resolving ? "Resolving…" : "Resolve"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Activity Page ─────────────────────────────────────────────────────────────
+function ActivityPage({ notifications, onResolve }) {
+  const all = notifications || [];
+  const pending = all.filter(
+    (n) => n.direction === "outbound" && (n.status === "Mock Sent" || n.status === "Sent")
+  );
+  const rows = [...all].sort(
+    (a, b) => new Date(b.created_at) - new Date(a.created_at)
+  );
+
+  const columns = [
+    { key: "created_at", label: "Date", render: (v) => fmtDate(v) },
+    {
+      key: "agent_key",
+      label: "Area",
+      render: (v) => (
+        <span className="area-tag">{AREA_LABEL[v] || v}</span>
+      ),
+    },
+    {
+      key: "entity_type",
+      label: "Type",
+      render: (v) => <span className="type-tag">{v}</span>,
+    },
+    { key: "subject", label: "Subject" },
+    {
+      key: "direction",
+      label: "Direction",
+      render: (v) => (
+        <span className={`dir-tag dir-${v}`}>{v}</span>
+      ),
+    },
+    { key: "channel", label: "Channel" },
+    {
+      key: "status",
+      label: "Status",
+      render: (v) => <StatusBadge value={v} />,
+    },
+    { key: "recipient_email", label: "Recipient" },
+  ];
+
+  return (
+    <div className="activity-layout">
+      {/* Pending Approvals */}
+      <div className="panel">
+        <SectionHeader
+          title="Pending Approvals"
+          sub="Actions sent by the agent — select reply signal and resolve to close"
+          right={
+            <span className="table-count">{pending.length} pending</span>
+          }
+        />
+        {pending.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon">✓</div>
+            <p>No pending approvals. All sent actions have been resolved.</p>
+          </div>
+        ) : (
+          <div className="pending-list">
+            {pending.map((n) => (
+              <PendingApprovalCard key={n.id} notification={n} onResolve={onResolve} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Activity Log */}
+      <div className="panel">
+        <SectionHeader
+          title="Agent Activity Log"
+          sub="Complete history of AI-generated actions and notifications"
+          right={
+            <span className="table-count">{rows.length} events</span>
+          }
+        />
+        {rows.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon">◌</div>
+            <p>No agent activity recorded yet.</p>
+            <p>Approve an AI action on any module to see it logged here.</p>
+          </div>
+        ) : (
+          <DataTable columns={columns} rows={rows} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Thresholds / Settings Page ────────────────────────────────────────────────
+function ThresholdsPage({
+  thresholds,
+  drafts,
+  onChange,
+  onSave,
+  savingId,
+  onReseed,
+  onUpload,
+  uploading,
+  uploadFile,
+  setUploadFile,
+  integrations,
+  onSyncGmail,
+}) {
+  const grouped = {};
+  for (const t of thresholds || []) {
+    if (!grouped[t.agent_key]) grouped[t.agent_key] = [];
+    grouped[t.agent_key].push(t);
+  }
+
+  const areaLabel = {
+    revenue_realization: "Revenue Realization",
+    billing_trigger: "Billing Triggers",
+    unbilled_revenue: "Unbilled Revenue",
+    collection_monitoring: "Collections",
+    revenue_forecasting: "Revenue Forecast",
+  };
+
+  return (
+    <div className="settings-layout">
+      {/* Threshold sections per agent */}
+      {Object.entries(grouped).map(([key, items]) => (
+        <div key={key} className="panel settings-section">
+          <div className="panel-kicker">{areaLabel[key] || key}</div>
+          <div className="threshold-grid">
+            {items.map((t) => {
+              const d = drafts[t.id] ?? t;
+              const saving = savingId === t.id;
+              return (
+                <div key={t.id} className="threshold-card">
+                  <div className="tc-label">{t.label}</div>
+                  <div className="tc-desc">{t.description}</div>
+                  <div className="tc-fields">
+                    <label className="tc-field">
+                      <span>Medium ({t.unit})</span>
+                      <input
+                        type="number"
+                        value={d.medium_value}
+                        onChange={(e) =>
+                          onChange(t.id, "medium_value", parseFloat(e.target.value))
+                        }
+                        className="tc-input"
+                      />
+                    </label>
+                    <label className="tc-field">
+                      <span>High ({t.unit})</span>
+                      <input
+                        type="number"
+                        value={d.high_value}
+                        onChange={(e) =>
+                          onChange(t.id, "high_value", parseFloat(e.target.value))
+                        }
+                        className="tc-input"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    className="btn-primary tc-save"
+                    onClick={() => onSave(t.id)}
+                    disabled={saving}
+                  >
+                    {saving ? "Saving…" : "Save Threshold"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Data Management */}
+      <div className="panel settings-section">
+        <div className="panel-kicker">Data Management</div>
+        <div className="data-mgmt-grid">
+          <div className="data-mgmt-card">
+            <div className="dmc-title">Upload Workbook</div>
+            <div className="dmc-desc">
+              Import data from an .xlsx workbook file. This replaces the current
+              dataset.
+            </div>
+            <input
+              type="file"
+              accept=".xlsx"
+              onChange={(e) =>
+                setUploadFile(e.target.files?.[0] || null)
+              }
+              className="dmc-file-input"
+            />
+            {uploadFile && (
+              <button
+                className="btn-primary dmc-btn"
+                onClick={onUpload}
+                disabled={uploading}
+              >
+                {uploading
+                  ? "Uploading…"
+                  : `Upload "${uploadFile.name}"`}
+              </button>
+            )}
+          </div>
+          <div className="data-mgmt-card">
+            <div className="dmc-title">Reseed Demo Data</div>
+            <div className="dmc-desc">
+              Regenerate and reload the default demo dataset from the seed
+              workbook.
+            </div>
+            <button className="btn-secondary dmc-btn" onClick={onReseed}>
+              Reseed Data
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Integrations */}
+      {integrations && integrations.length > 0 && (
+        <div className="panel settings-section">
+          <div className="panel-kicker">Integrations</div>
+          <div className="integrations-grid">
+            {integrations.map((intg) => (
+              <div key={intg.channel} className="integration-card">
+                <div className="intg-top">
+                  <div className="intg-name">
+                    {intg.channel === "gmail" ? "Gmail" : intg.channel}
+                  </div>
+                  <StatusBadge
+                    value={intg.configured ? "configured" : "not-configured"}
+                  />
+                </div>
+                <div className="intg-detail">{intg.detail}</div>
+                {intg.last_sync_at && (
+                  <div className="intg-sync">
+                    Last sync: {fmtDate(intg.last_sync_at)}
+                  </div>
+                )}
+                {intg.channel === "gmail" && intg.configured && (
+                  <button
+                    className="btn-secondary intg-btn"
+                    onClick={onSyncGmail}
+                  >
+                    Sync Gmail Now
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+function Sidebar({ active, onChange, queueCount }) {
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-logo">
+      
+        <div className="sidebar-logo-text">
+          <div className="sidebar-app-name">BMF</div>
+          <div className="sidebar-app-sub">Finance Monitor</div>
+        </div>
+      </div>
+
+      <nav className="sidebar-nav">
+        {NAV.map((item) => (
+          <button
+            key={item.id}
+            className={`sidebar-nav-item${active === item.id ? " active" : ""}`}
+            onClick={() => onChange(item.id)}
+          >
+            <span className="sni-icon">{NAV_ICONS[item.id]}</span>
+            <span className="sni-text">
+              <span className="sni-label">{item.label}</span>
+              <span className="sni-desc">{item.desc}</span>
+            </span>
+            {item.id === "overview" && queueCount > 0 && (
+              <span className="sni-badge">{queueCount}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+
+      <div className="sidebar-footer">
+        <div className="sidebar-footer-text">BFM Lead Dashboard</div>
+      </div>
+    </aside>
+  );
+}
+
+// ── Top Bar ───────────────────────────────────────────────────────────────────
+function TopBar({
+  activeTab,
+  provider,
+  providers,
+  onProviderChange,
+  onRefresh,
+  refreshing,
+  lastUpdated,
+}) {
+  const navItem = NAV.find((n) => n.id === activeTab);
+  const timeStr = lastUpdated
+    ? new Date(lastUpdated).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
+  return (
+    <header className="top-bar">
+      <div className="topbar-title">
+        <div className="topbar-page-name">{navItem?.label || "Dashboard"}</div>
+        <div className="topbar-page-sub">{navItem?.desc || ""}</div>
+      </div>
+
+      <div className="topbar-right">
+        {timeStr && (
+          <div className="topbar-updated">Updated at {timeStr}</div>
+        )}
+
+        <div className="topbar-provider">
+          <label className="topbar-provider-label">AI</label>
+          <select
+            className="topbar-select"
+            value={provider}
+            onChange={(e) => onProviderChange(e.target.value)}
+          >
+            {(providers || []).map((p) => (
+              <option
+                key={p.provider}
+                value={p.provider}
+                disabled={!p.available}
+              >
+                {p.provider}
+                {!p.available ? " (unavailable)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          className={`topbar-refresh${refreshing ? " spinning" : ""}`}
+          onClick={onRefresh}
+          title="Refresh data"
+          disabled={refreshing}
+        >
+          ↻
+        </button>
+      </div>
+    </header>
+  );
+}
+
+// ── App Root ──────────────────────────────────────────────────────────────────
 function App({ appName, defaultProvider }) {
   const [providers, setProviders] = useState([]);
   const [provider, setProvider] = useState(defaultProvider || "mock");
@@ -438,672 +1886,386 @@ function App({ appName, defaultProvider }) {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
-  const [statusMessage, setStatusMessage] = useState("");
+  const [statusMsg, setStatusMsg] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [draftModalOpen, setDraftModalOpen] = useState(false);
+  const [dismissedRefs, setDismissedRefs] = useState(new Set());
+
+  const showStatus = useCallback((msg, isError = false) => {
+    if (isError) setError(msg);
+    else setStatusMsg(msg);
+    setTimeout(() => {
+      setError("");
+      setStatusMsg("");
+    }, 5000);
+  }, []);
 
   async function loadDashboard() {
     setLoading(true);
     setError("");
     try {
-      const [providerOptions, dashboardPayload] = await Promise.all([fetchJson("/api/providers"), fetchJson("/api/dashboard")]);
-      setProviders(providerOptions);
-      startTransition(() => {
-        setDashboard(dashboardPayload);
-      });
-      setProvider((current) => {
-        const currentOption = providerOptions.find((item) => item.provider === current && item.available);
-        if (currentOption) {
-          return current;
-        }
-        const configuredDefault = providerOptions.find((item) => item.provider === defaultProvider && item.available);
-        const firstAvailable = providerOptions.find((item) => item.available);
-        return configuredDefault?.provider ?? firstAvailable?.provider ?? "mock";
-      });
-    } catch (loadError) {
-      setError(loadError.message);
+      const [providerList, data] = await Promise.all([
+        fetchJson("/api/providers"),
+        fetchJson("/api/dashboard"),
+      ]);
+      setProviders(providerList);
+      setDashboard(data);
+      setLastUpdated(new Date().toISOString());
+
+      // Auto-select best available provider
+      const currentOk = providerList.find(
+        (p) => p.provider === provider && p.available
+      );
+      if (!currentOk) {
+        const defaultOk = providerList.find(
+          (p) => p.provider === defaultProvider && p.available
+        );
+        const firstOk = providerList.find((p) => p.available);
+        setProvider((defaultOk || firstOk)?.provider || "mock");
+      }
+    } catch (e) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void loadDashboard();
+    loadDashboard();
   }, []);
 
-  const sections = dashboard
-    ? {
-        revenue_realization: {
-          summary: dashboard.revenue_realization.summary,
-          nudges: dashboard.revenue_realization.nudges,
-          rows: dashboard.revenue_realization.rows.map((row) => ({ ...row, agent_key: "revenue_realization" })),
-          columns: [
-            { label: "Account", key: "account_name" },
-            { label: "Project", key: "project_code", render: (row) => <strong>{row.project_code}</strong> },
-            { label: "Plan", key: "revenue_plan", render: (row) => money.format(row.revenue_plan) },
-            { label: "Recognized", key: "revenue_recognized", render: (row) => money.format(row.revenue_recognized) },
-            { label: "Remaining", key: "revenue_remaining", render: (row) => money.format(row.revenue_remaining) },
-            { label: "Forecast", key: "revenue_forecast", render: (row) => money.format(row.revenue_forecast) },
-            { label: "Gap", key: "revenue_gap", render: (row) => money.format(row.revenue_gap) },
-            { label: "Completion", key: "revenue_completion_pct", render: (row) => percentage.format(row.revenue_completion_pct) },
-            { label: "Risk", key: "risk_level", render: (row) => <StatusBadge value={row.risk_level} /> },
-          ],
-          metrics: [
-            { label: "Revenue Plan", value: money.format(dashboard.revenue_realization.summary.revenue_plan), note: "Target revenue" },
-            { label: "Recognized", value: money.format(dashboard.revenue_realization.summary.revenue_recognized), note: "Booked revenue" },
-            { label: "Remaining", value: money.format(dashboard.revenue_realization.summary.revenue_remaining), note: "Yet to realize" },
-            { label: "Gap", value: money.format(dashboard.revenue_realization.summary.revenue_gap), note: "Forecast minus plan" },
-          ],
-        },
-        billing_trigger: {
-          summary: dashboard.billing_trigger.summary,
-          nudges: dashboard.billing_trigger.nudges,
-          rows: dashboard.billing_trigger.rows.map((row) => ({ ...row, agent_key: "billing_trigger" })),
-          columns: [
-            { label: "Account", key: "account_name" },
-            { label: "Project", key: "project_code" },
-            { label: "Milestone", key: "billing_milestone" },
-            { label: "Billable", key: "billable_amount", render: (row) => money.format(row.billable_amount) },
-            { label: "Billed", key: "billed_amount", render: (row) => money.format(row.billed_amount) },
-            { label: "Unbilled", key: "unbilled_amount", render: (row) => money.format(row.unbilled_amount) },
-            { label: "Delay", key: "billing_delay_days", render: (row) => `${row.billing_delay_days} days` },
-            { label: "Status", key: "billing_status", render: (row) => <StatusBadge value={row.billing_status} type="status" /> },
-            { label: "Risk", key: "risk_level", render: (row) => <StatusBadge value={row.risk_level} /> },
-          ],
-          metrics: [
-            { label: "Billable Amount", value: money.format(dashboard.billing_trigger.summary.billable_amount), note: "Eligible this period" },
-            { label: "Invoices Pending", value: number.format(dashboard.billing_trigger.summary.invoices_pending), note: "Milestones waiting" },
-            { label: "Unbilled Revenue", value: money.format(dashboard.billing_trigger.summary.unbilled_revenue), note: "Pending invoice trigger" },
-            { label: "Avg Delay", value: `${number.format(dashboard.billing_trigger.summary.average_billing_delay)} days`, note: "Completion to billing" },
-          ],
-        },
-        unbilled_revenue: {
-          summary: dashboard.unbilled_revenue.summary,
-          nudges: dashboard.unbilled_revenue.nudges,
-          rows: dashboard.unbilled_revenue.rows.map((row) => ({ ...row, agent_key: "unbilled_revenue" })),
-          columns: [
-            { label: "Account", key: "account_name" },
-            { label: "Project", key: "project_code" },
-            { label: "Recognized", key: "revenue_recognized", render: (row) => money.format(row.revenue_recognized) },
-            { label: "Billed", key: "revenue_billed", render: (row) => money.format(row.revenue_billed) },
-            { label: "Unbilled", key: "unbilled_revenue", render: (row) => money.format(row.unbilled_revenue) },
-            { label: "Aging", key: "days_unbilled", render: (row) => `${row.days_unbilled} days` },
-            { label: "Owner", key: "billing_owner" },
-            { label: "Risk", key: "risk_level", render: (row) => <StatusBadge value={row.risk_level} /> },
-          ],
-          metrics: [
-            { label: "Recognized", value: money.format(dashboard.unbilled_revenue.summary.total_revenue_recognized), note: "Current period" },
-            { label: "Billed", value: money.format(dashboard.unbilled_revenue.summary.total_revenue_billed), note: "Invoices raised" },
-            { label: "Unbilled", value: money.format(dashboard.unbilled_revenue.summary.total_unbilled_revenue), note: "Revenue leakage risk" },
-            { label: "Avg Aging", value: `${number.format(dashboard.unbilled_revenue.summary.average_days_unbilled)} days`, note: "Average days unbilled" },
-          ],
-        },
-        collection_monitoring: {
-          summary: dashboard.collection_monitoring.summary,
-          nudges: dashboard.collection_monitoring.nudges,
-          rows: dashboard.collection_monitoring.rows.map((row) => ({ ...row, agent_key: "collection_monitoring" })),
-          columns: [
-            { label: "Account", key: "account_name" },
-            { label: "Invoice", key: "invoice_number" },
-            { label: "Project", key: "project_code" },
-            { label: "Amount", key: "invoice_amount", render: (row) => money.format(row.invoice_amount) },
-            { label: "Received", key: "amount_received", render: (row) => money.format(row.amount_received) },
-            { label: "Outstanding", key: "outstanding_balance", render: (row) => money.format(row.outstanding_balance) },
-            { label: "Overdue", key: "overdue_days", render: (row) => `${row.overdue_days} days` },
-            { label: "Status", key: "collection_status", render: (row) => <StatusBadge value={row.collection_status} type="status" /> },
-            { label: "Risk", key: "collection_risk", render: (row) => <StatusBadge value={row.collection_risk} /> },
-          ],
-          metrics: [
-            { label: "Total Invoiced", value: money.format(dashboard.collection_monitoring.summary.total_invoiced), note: "Invoices issued" },
-            { label: "Collected", value: money.format(dashboard.collection_monitoring.summary.total_collected), note: "Cash received" },
-            { label: "Receivables", value: money.format(dashboard.collection_monitoring.summary.outstanding_receivables), note: "Pending collections" },
-            { label: "DSO", value: `${number.format(dashboard.collection_monitoring.summary.dso)} days`, note: "Average collection cycle" },
-          ],
-        },
-        revenue_forecasting: {
-          summary: dashboard.revenue_forecasting.summary,
-          nudges: dashboard.revenue_forecasting.nudges,
-          rows: dashboard.revenue_forecasting.rows.map((row) => ({ ...row, agent_key: "revenue_forecasting" })),
-          columns: [
-            { label: "Account", key: "account_name" },
-            { label: "Project", key: "project_code" },
-            { label: "Plan", key: "revenue_plan", render: (row) => money.format(row.revenue_plan) },
-            { label: "Recognized", key: "revenue_recognized", render: (row) => money.format(row.revenue_recognized) },
-            { label: "Forecast", key: "revenue_forecast", render: (row) => money.format(row.revenue_forecast) },
-            { label: "Gap", key: "revenue_gap", render: (row) => money.format(row.revenue_gap) },
-            { label: "Confidence", key: "forecast_confidence", render: (row) => percentage.format(row.forecast_confidence) },
-            { label: "Risk", key: "risk_level", render: (row) => <StatusBadge value={row.risk_level} /> },
-          ],
-          metrics: [
-            { label: "Revenue Plan", value: money.format(dashboard.revenue_forecasting.summary.revenue_plan), note: "Target revenue" },
-            { label: "Recognized", value: money.format(dashboard.revenue_forecasting.summary.revenue_recognized), note: "Current actuals" },
-            { label: "Forecast", value: money.format(dashboard.revenue_forecasting.summary.revenue_forecast), note: "Predicted month close" },
-            { label: "Confidence", value: percentage.format(dashboard.revenue_forecasting.summary.forecast_confidence_score), note: "Average forecast confidence" },
-          ],
-        },
-      }
-    : {};
-
-  function getSection(agentKey) {
-    return sections[agentKey] ?? null;
+  function switchTab(tabId) {
+    setActiveTab(tabId);
+    setSelectedRef(null);
+    setDraft(null);
   }
 
-  function resolveEntity(ref) {
-    if (!dashboard || !ref) {
-      return null;
-    }
-    const section = getSection(ref.agent_key);
-    return section?.rows.find((row) => sameSelection(row, ref)) ?? null;
-  }
-
-  function resolveNudge(ref) {
-    if (!dashboard || !ref) {
-      return null;
-    }
-    const section = getSection(ref.agent_key);
-    return section?.nudges.find((item) => sameSelection(item, ref)) ?? dashboard.queue.find((item) => sameSelection(item, ref)) ?? null;
-  }
-
-  function defaultSelectionForTab(tabId) {
-    if (!dashboard || tabId === "thresholds") {
-      return null;
-    }
-    if (tabId === "overview") {
-      return dashboard.queue[0] ?? null;
-    }
-    const section = getSection(tabId);
-    return section?.nudges[0] ?? section?.rows[0] ?? null;
-  }
-
-  function selectItem(item) {
-    const nextRef = {
-      agent_key: item.agent_key,
-      entity_type: item.entity_type,
-      entity_id: item.entity_id,
+  function agentKeyForTab(tabId) {
+    const keys = {
+      revenue_realization: "revenue_realization",
+      billing_trigger: "billing_trigger",
+      unbilled_revenue: "unbilled_revenue",
+      collection_monitoring: "collection_monitoring",
+      revenue_forecasting: "revenue_forecasting",
     };
-    setSelectedRef(nextRef);
-    if (!sameSelection(draft, nextRef)) {
+    return keys[tabId] || tabId;
+  }
+
+  function handleRowClick(row) {
+    const agentKey = agentKeyForTab(activeTab);
+    const ref = makeRef(row, agentKey);
+    if (selectedRef && sameSel(selectedRef, ref)) {
+      setSelectedRef(null);
+      setDraft(null);
+    } else {
+      setSelectedRef(ref);
       setDraft(null);
     }
   }
 
-  useEffect(() => {
-    if (!dashboard || activeTab === "thresholds") {
-      return;
+  function handleNudgeSelect(ref) {
+    const alreadySelected = selectedRef && sameSel(selectedRef, ref);
+    setSelectedRef(ref);
+    if (!alreadySelected) {
+      setDraft(null);
     }
-    const selectedItem = resolveEntity(selectedRef);
-    if (selectedItem && (activeTab === "overview" || selectedItem.agent_key === activeTab)) {
-      return;
-    }
-    const fallback = defaultSelectionForTab(activeTab);
-    if (!fallback) {
-      return;
-    }
-    const fallbackRef = {
-      agent_key: fallback.agent_key,
-      entity_type: fallback.entity_type,
-      entity_id: fallback.entity_id,
-    };
-    if (!sameSelection(selectedRef, fallbackRef)) {
-      setSelectedRef(fallbackRef);
-      if (!sameSelection(draft, fallbackRef)) {
-        setDraft(null);
-      }
-    }
-  }, [dashboard, activeTab, selectedRef, draft]);
+    generateDraft(ref);
+  }
 
-  async function generateDraft(target = null) {
-    const item = target ?? resolveEntity(selectedRef);
-    if (!item) {
-      return;
-    }
+  async function generateDraft(targetRef = null) {
+    const ref = targetRef || selectedRef;
+    if (!ref) return;
+
+    setDraftModalOpen(true);
     setDraftLoading(true);
-    setError("");
+    setDraft(null);
     try {
-      const response = await fetchJson("/api/agent/draft-followup", {
+      const resp = await fetchJson("/api/agent/draft-followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          agent_key: item.agent_key,
-          entity_type: item.entity_type,
-          entity_id: item.entity_id,
+          agent_key: ref.agent_key,
+          entity_type: ref.entity_type,
+          entity_id: ref.entity_id,
           provider,
-          question: `Prepare a ${item.agent_key.replaceAll("_", " ")} follow-up for ${item.account_name}.`,
         }),
       });
-      setDraft(response);
-      setSelectedRef({
-        agent_key: response.agent_key,
-        entity_type: response.entity_type,
-        entity_id: response.entity_id,
+      setDraft({
+        ...resp,
+        agent_key: ref.agent_key,
+        entity_type: ref.entity_type,
+        entity_id: ref.entity_id,
       });
-    } catch (draftError) {
-      setError(draftError.message);
+    } catch (e) {
+      showStatus(e.message, true);
     } finally {
       setDraftLoading(false);
     }
   }
 
   async function approveDraft() {
-    if (!draft) {
-      return;
-    }
+    if (!selectedRef) return;
     setSending(true);
-    setError("");
-    setStatusMessage("");
     try {
-      const response = await fetchJson("/api/actions/approve", {
+      const resp = await fetchJson("/api/actions/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          agent_key: draft.agent_key,
-          entity_type: draft.entity_type,
-          entity_id: draft.entity_id,
+          agent_key: selectedRef.agent_key,
+          entity_type: selectedRef.entity_type,
+          entity_id: selectedRef.entity_id,
           provider,
           channel,
-          question: `Prepare a ${draft.agent_key.replaceAll("_", " ")} follow-up for ${draft.account_name}.`,
         }),
       });
-      setStatusMessage(`Action ${response.action_id} sent to ${response.recipient_email} via ${response.channel}.`);
-      await loadDashboard();
-    } catch (approveError) {
-      setError(approveError.message);
+      showStatus(
+        `✓ Sent — Status: ${resp.status} · Channel: ${resp.channel} · To: ${resp.recipient_email}`
+      );
+      // Hide this nudge from the queue until it is resolved
+      const key = `${selectedRef.agent_key}:${selectedRef.entity_id}`;
+      setDismissedRefs((prev) => new Set([...prev, key]));
+      setDraftModalOpen(false);
+      setDraft(null);
+      setSelectedRef(null);
+      loadDashboard();
+    } catch (e) {
+      showStatus(e.message, true);
     } finally {
       setSending(false);
     }
   }
 
-  async function saveThreshold(thresholdId) {
-    const draftValues = thresholdDrafts[thresholdId];
-    if (!draftValues) {
-      return;
-    }
-    setSavingThresholdId(thresholdId);
-    setError("");
+  async function resolveNotification(notificationId, signal) {
     try {
-      await fetchJson(`/api/thresholds/${thresholdId}`, {
+      await fetchJson(`/api/actions/${notificationId}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signal }),
+      });
+      showStatus("Marked as resolved. Agent alerts will update.");
+      loadDashboard();
+    } catch (e) {
+      showStatus(e.message, true);
+    }
+  }
+
+  async function saveThreshold(id) {
+    const d = thresholdDrafts[id];
+    if (!d) return;
+    setSavingThresholdId(id);
+    try {
+      await fetchJson(`/api/thresholds/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          medium_value: Number(draftValues.medium_value),
-          high_value: Number(draftValues.high_value),
+          medium_value: d.medium_value,
+          high_value: d.high_value,
         }),
       });
-      setStatusMessage("Threshold updated.");
-      await loadDashboard();
-    } catch (saveError) {
-      setError(saveError.message);
+      showStatus("Threshold saved.");
+      loadDashboard();
+    } catch (e) {
+      showStatus(e.message, true);
     } finally {
       setSavingThresholdId(null);
     }
   }
 
-  async function syncGmail() {
-    setError("");
-    try {
-      const response = await fetchJson("/api/integrations/gmail/sync", { method: "POST" });
-      setStatusMessage(response.detail);
-      await loadDashboard();
-    } catch (syncError) {
-      setError(syncError.message);
-    }
-  }
-
   async function reseedData() {
-    setError("");
     try {
-      await fetchJson("/api/data/reseed?regenerate_workbook=true", { method: "POST" });
-      setDraft(null);
-      await loadDashboard();
-    } catch (reseedError) {
-      setError(reseedError.message);
+      const resp = await fetchJson("/api/data/reseed", { method: "POST" });
+      showStatus(`Reseeded: ${resp.records_loaded} records loaded.`);
+      loadDashboard();
+    } catch (e) {
+      showStatus(e.message, true);
     }
   }
 
   async function uploadWorkbook() {
-    if (!uploadFile) {
-      setError("Select an .xlsx workbook to upload.");
-      return;
-    }
+    if (!uploadFile) return;
     setUploading(true);
-    setError("");
-    setStatusMessage("");
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
-      const response = await fetchJson("/api/data/upload", {
+      const resp = await fetchJson("/api/data/upload", {
         method: "POST",
         body: formData,
       });
-      setStatusMessage(`Workbook uploaded. ${response.records_loaded} records loaded from ${response.workbook_path}.`);
+      showStatus(`Uploaded: ${resp.records_loaded} records loaded.`);
       setUploadFile(null);
-      await loadDashboard();
-    } catch (uploadError) {
-      setError(uploadError.message);
+      loadDashboard();
+    } catch (e) {
+      showStatus(e.message, true);
     } finally {
       setUploading(false);
     }
   }
 
+  async function syncGmail() {
+    try {
+      const resp = await fetchJson("/api/integrations/gmail/sync", {
+        method: "POST",
+      });
+      showStatus(
+        `Gmail synced: ${resp.synced_threads} threads, ${resp.updated_actions} updated.`
+      );
+      loadDashboard();
+    } catch (e) {
+      showStatus(e.message, true);
+    }
+  }
+
   function handleThresholdChange(id, key, value) {
-    setThresholdDrafts((current) => ({
-      ...current,
-      [id]: {
-        ...(current[id] ?? dashboard.thresholds.find((item) => item.id === id)),
-        [key]: value,
-      },
-    }));
+    setThresholdDrafts((prev) => {
+      const existing =
+        prev[id] ??
+        dashboard?.thresholds?.find((t) => t.id === id) ??
+        {};
+      return { ...prev, [id]: { ...existing, [key]: value } };
+    });
   }
 
-  if (!dashboard) {
-    return <main className="page-shell">{loading ? <div className="status-banner">Loading dashboard...</div> : null}</main>;
-  }
+  const visibleQueue = (dashboard?.queue || []).filter(
+    (n) => !dismissedRefs.has(`${n.agent_key}:${n.entity_id}`)
+  );
+  const queueCount = visibleQueue.length;
 
-  const selectedItem = resolveEntity(selectedRef);
-  const selectedNudge = resolveNudge(selectedRef);
-  const overviewCards = [
-    { label: "Revenue Plan", value: money.format(dashboard.overview.revenue_plan), note: "Current period target" },
-    { label: "Recognized", value: money.format(dashboard.overview.revenue_recognized), note: "Revenue already recognized" },
-    { label: "Forecast", value: money.format(dashboard.overview.revenue_forecast), note: "AI-assisted month close" },
-    { label: "Unbilled", value: money.format(dashboard.overview.unbilled_revenue), note: "Recognized but not invoiced" },
-    { label: "Receivables", value: money.format(dashboard.overview.outstanding_receivables), note: "Open cash collections" },
-    { label: "Revenue at Risk", value: money.format(dashboard.overview.revenue_at_risk), note: "Forecast below plan" },
-  ];
-  const topQueue = dashboard.queue.slice(0, 5);
-  const backlogQueue = dashboard.queue.slice(5);
+  const moduleProps = {
+    selectedRef,
+    onRowClick: handleRowClick,
+    draft,
+    draftLoading,
+    sending,
+    channel,
+    setChannel,
+    onGenerate: generateDraft,
+    onApprove: approveDraft,
+  };
 
   return (
-    <main className="page-shell">
-      <header className="hero">
-        <div className="hero-copy-block">
-          <p className="eyebrow">BFM Lead Workspace</p>
-          <h1>{appName}</h1>
-          <p className="hero-copy">
-            Morning financial health scan, five operational finance sub-agents, configurable risk thresholds, and approval-driven follow-ups tied to milestone and collection status.
-          </p>
-        </div>
-        <div className="hero-actions">
-          <label>
-            <span>LLM Provider</span>
-            <select value={provider} onChange={(event) => setProvider(event.target.value)}>
-              {providers.map((item) => (
-                <option key={item.provider} value={item.provider} disabled={!item.available}>
-                  {item.provider} · {item.model}
-                  {item.available ? "" : " (not configured)"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button onClick={() => loadDashboard()}>Refresh dashboard</button>
-          <button onClick={reseedData}>Reset demo data</button>
-          <button onClick={syncGmail}>Sync Gmail replies</button>
-          <a href="/api/data/workbook">Download workbook</a>
-        </div>
-      </header>
+    <div className="app-shell">
+      <DraftModal
+        open={draftModalOpen}
+        draft={draft}
+        draftLoading={draftLoading}
+        sending={sending}
+        channel={channel}
+        setChannel={setChannel}
+        onApprove={approveDraft}
+        onClose={() => setDraftModalOpen(false)}
+      />
+      <Sidebar active={activeTab} onChange={switchTab} queueCount={queueCount} />
 
-      {error ? <div className="status-banner error">{error}</div> : null}
-      {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
-      {loading ? <div className="status-banner">Refreshing dashboard...</div> : null}
+      <div className="main-wrapper">
+        <TopBar
+          activeTab={activeTab}
+          provider={provider}
+          providers={providers}
+          onProviderChange={setProvider}
+          onRefresh={loadDashboard}
+          refreshing={loading}
+          lastUpdated={lastUpdated}
+        />
 
-      <MetricGrid items={overviewCards} />
-
-      <nav className="tab-strip">
-        {tabs.map((tab) => (
-          <button key={tab.id} className={tab.id === activeTab ? "active" : ""} onClick={() => setActiveTab(tab.id)}>
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-
-      {activeTab === "overview" ? (
-        <section className="workspace-grid">
-          <div className="workspace-main">
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Morning Scan</p>
-                  <h2>Top 5 priority nudges</h2>
-                </div>
-                <span className="queue-count">{topQueue.length} prioritized</span>
-              </div>
-              <QueueStack
-                items={topQueue}
-                selectedRef={selectedRef}
-                onAnalyze={(item) => selectItem(item)}
-                onDraft={async (item) => {
-                  selectItem(item);
-                  await generateDraft(item);
-                }}
-                className="featured-queue"
-              />
-            </div>
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Backlog</p>
-                  <h2>Remaining nudges</h2>
-                </div>
-                <span className="queue-count">{backlogQueue.length} more items</span>
-              </div>
-              <div className="scroll-shell">
-                <QueueStack
-                  items={backlogQueue}
-                  selectedRef={selectedRef}
-                  onAnalyze={(item) => selectItem(item)}
-                  onDraft={async (item) => {
-                    selectItem(item);
-                    await generateDraft(item);
-                  }}
-                />
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Narrative</p>
-                  <h2>{dashboard.narrative.headline}</h2>
-                </div>
-              </div>
-              <p className="report-copy">{dashboard.narrative.narrative}</p>
-              <div className="split-stack">
-                <div>
-                  <span className="label">Accounts with biggest gap</span>
-                  {dashboard.narrative.top_accounts.map((item) => (
-                    <div className="stack-row" key={item.account_name}>
-                      <span>{item.account_name}</span>
-                      <strong>{money.format(item.forecast_gap || 0)}</strong>
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <span className="label">Delivery units</span>
-                  {dashboard.narrative.top_delivery_units.map((item) => (
-                    <div className="stack-row" key={item.delivery_unit}>
-                      <span>{item.delivery_unit}</span>
-                      <strong>{money.format(item.forecast_gap || 0)}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Integration</p>
-                  <h2>Notification channels</h2>
-                </div>
-              </div>
-              {dashboard.integrations.map((item) => (
-                <article className="integration-card" key={item.channel}>
-                  <div className="integration-head">
-                    <strong>{item.channel}</strong>
-                    <StatusBadge value={item.configured ? "Configured" : "Not Configured"} type="status" />
-                  </div>
-                  <p>{item.detail}</p>
-                  <small>Last sync: {item.last_sync_at ?? "Not synced yet"}</small>
-                </article>
-              ))}
-            </div>
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">History</p>
-                  <h2>Notification timeline</h2>
-                </div>
-              </div>
-              <NotificationList items={dashboard.notifications} />
-            </div>
+        {(error || statusMsg) && (
+          <div className={`status-banner${error ? " error" : ""}`}>
+            {error || statusMsg}
           </div>
-          <div className="workspace-sidebar">
-            <AnalysisPanel item={selectedItem} nudge={selectedNudge} generating={draftLoading} onGenerateDraft={() => generateDraft()} />
-            <DraftPanel
-              item={selectedItem}
-              draft={draft}
-              sending={sending}
-              generating={draftLoading}
-              channel={channel}
-              setChannel={setChannel}
-              onGenerateDraft={() => generateDraft()}
-              onApprove={approveDraft}
-            />
-          </div>
-        </section>
-      ) : null}
-
-      {tabs
-        .filter((tab) => !["overview", "thresholds"].includes(tab.id))
-        .map((tab) =>
-          activeTab === tab.id ? (
-            <section className="workspace-grid" key={tab.id}>
-              <div className="workspace-main">
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <p className="panel-kicker">{tab.label}</p>
-                      <h2>{tab.label} agent</h2>
-                    </div>
-                    <span className="queue-count">{sections[tab.id].nudges.length} active nudges</span>
-                  </div>
-                  <MetricGrid items={sections[tab.id].metrics} />
-                </div>
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <p className="panel-kicker">{tab.label}</p>
-                      <h2>Priority nudges</h2>
-                    </div>
-                  </div>
-                  <div className="scroll-shell medium">
-                    <QueueStack
-                      items={sections[tab.id].nudges}
-                      selectedRef={selectedRef}
-                      onAnalyze={(item) => selectItem(item)}
-                      onDraft={async (item) => {
-                        selectItem(item);
-                        await generateDraft(item);
-                      }}
-                    />
-                  </div>
-                </div>
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <p className="panel-kicker">{tab.label}</p>
-                      <h2>Agent data</h2>
-                    </div>
-                  </div>
-                  <SimpleTable
-                    columns={sections[tab.id].columns}
-                    rows={sections[tab.id].rows}
-                    selectedRef={selectedRef}
-                    onInspect={(row) => selectItem(row)}
-                  />
-                </div>
-              </div>
-              <div className="workspace-sidebar">
-                <AnalysisPanel item={selectedItem} nudge={selectedNudge} generating={draftLoading} onGenerateDraft={() => generateDraft()} />
-                <DraftPanel
-                  item={selectedItem}
-                  draft={draft}
-                  sending={sending}
-                  generating={draftLoading}
-                  channel={channel}
-                  setChannel={setChannel}
-                  onGenerateDraft={() => generateDraft()}
-                  onApprove={approveDraft}
-                />
-              </div>
-            </section>
-          ) : null,
         )}
 
-      {activeTab === "thresholds" ? (
-        <section className="workspace-grid">
-          <div className="workspace-main">
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Controls</p>
-                  <h2>Risk thresholds and reply automation</h2>
-                </div>
-              </div>
-              <div className="upload-panel">
-                <div>
-                  <span className="label">Workbook upload</span>
-                  <p>Upload an .xlsx workbook (for example `sample_data.xlsx`) to recalculate all agent KPIs and nudges.</p>
-                </div>
-                <div className="upload-actions">
-                  <input
-                    type="file"
-                    accept=".xlsx"
-                    onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
-                  />
-                  <button onClick={uploadWorkbook} disabled={uploading}>
-                    {uploading ? "Uploading..." : "Upload workbook"}
-                  </button>
-                </div>
-              </div>
-              <ThresholdEditor
-                thresholds={dashboard.thresholds}
-                drafts={thresholdDrafts}
-                onChange={handleThresholdChange}
-                onSave={saveThreshold}
-                savingId={savingThresholdId}
-              />
-            </section>
-          </div>
-          <div className="workspace-sidebar">
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">Integrations</p>
-                  <h2>Notification channels</h2>
-                </div>
-              </div>
-              {dashboard.integrations.map((item) => (
-                <article className="integration-card" key={item.channel}>
-                  <div className="integration-head">
-                    <strong>{item.channel}</strong>
-                    <StatusBadge value={item.configured ? "Configured" : "Not Configured"} type="status" />
-                  </div>
-                  <p>{item.detail}</p>
-                  <small>Last sync: {item.last_sync_at ?? "Not synced yet"}</small>
-                </article>
-              ))}
-            </section>
-            <section className="panel">
-              <div className="panel-header">
-                <div>
-                  <p className="panel-kicker">History</p>
-                  <h2>Recent notifications</h2>
-                </div>
-              </div>
-              <NotificationList items={dashboard.notifications} />
-            </section>
-          </div>
-        </section>
-      ) : null}
-    </main>
+        <main className="page-content">
+          {loading && !dashboard && (
+            <div className="loading-state">
+              <div className="loading-spinner" />
+              <div className="loading-text">Loading dashboard data…</div>
+            </div>
+          )}
+
+          {dashboard && (
+            <>
+              {activeTab === "overview" && (
+                <OverviewPage
+                  dashboard={{ ...dashboard, queue: visibleQueue }}
+                  selectedRef={selectedRef}
+                  onNudgeSelect={handleNudgeSelect}
+                  draft={draft}
+                  draftLoading={draftLoading}
+                  sending={sending}
+                  channel={channel}
+                  setChannel={setChannel}
+                  onGenerate={generateDraft}
+                  onApprove={approveDraft}
+                />
+              )}
+
+              {activeTab === "revenue_realization" && (
+                <RevenuePage
+                  section={dashboard.revenue_realization}
+                  {...moduleProps}
+                />
+              )}
+
+              {activeTab === "billing_trigger" && (
+                <BillingPage
+                  section={dashboard.billing_trigger}
+                  {...moduleProps}
+                />
+              )}
+
+              {activeTab === "unbilled_revenue" && (
+                <UnbilledPage
+                  section={dashboard.unbilled_revenue}
+                  {...moduleProps}
+                />
+              )}
+
+              {activeTab === "collection_monitoring" && (
+                <CollectionsPage
+                  section={dashboard.collection_monitoring}
+                  {...moduleProps}
+                />
+              )}
+
+              {activeTab === "revenue_forecasting" && (
+                <ForecastPage
+                  section={dashboard.revenue_forecasting}
+                  {...moduleProps}
+                />
+              )}
+
+              {activeTab === "agent_activity" && (
+                <ActivityPage
+                  notifications={dashboard.notifications}
+                  onResolve={resolveNotification}
+                />
+              )}
+
+              {activeTab === "thresholds" && (
+                <ThresholdsPage
+                  thresholds={dashboard.thresholds}
+                  drafts={thresholdDrafts}
+                  onChange={handleThresholdChange}
+                  onSave={saveThreshold}
+                  savingId={savingThresholdId}
+                  onReseed={reseedData}
+                  onUpload={uploadWorkbook}
+                  uploading={uploading}
+                  uploadFile={uploadFile}
+                  setUploadFile={setUploadFile}
+                  integrations={dashboard.integrations}
+                  onSyncGmail={syncGmail}
+                />
+              )}
+            </>
+          )}
+        </main>
+      </div>
+    </div>
   );
 }
 
-const rootElement = document.getElementById("root");
-createRoot(rootElement).render(<App appName={rootElement.dataset.appName} defaultProvider={rootElement.dataset.defaultProvider} />);
+// ── Mount ─────────────────────────────────────────────────────────────────────
+const rootEl = document.getElementById("root");
+const appName = rootEl?.dataset?.appName || "BFM AI Agent";
+const defaultProvider = rootEl?.dataset?.defaultProvider || "mock";
+createRoot(rootEl).render(<App appName={appName} defaultProvider={defaultProvider} />);
