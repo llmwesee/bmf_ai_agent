@@ -1791,10 +1791,10 @@ function Sidebar({ active, onChange, queueCount }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-      
+        <div className="sidebar-logo-mark">BFM</div>
         <div className="sidebar-logo-text">
-          <div className="sidebar-app-name">BMF</div>
-          <div className="sidebar-app-sub">Finance Monitor</div>
+          <div className="sidebar-app-name">BFM Agent</div>
+          <div className="sidebar-app-sub">AI Finance Operations</div>
         </div>
       </div>
 
@@ -1818,7 +1818,7 @@ function Sidebar({ active, onChange, queueCount }) {
       </nav>
 
       <div className="sidebar-footer">
-        <div className="sidebar-footer-text">BFM Lead Dashboard</div>
+        <div className="sidebar-footer-text">BFM Agentic Platform</div>
       </div>
     </aside>
   );
