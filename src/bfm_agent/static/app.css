@@ -216,6 +216,8 @@ ul {
   font-size: 0.8rem;
   font-weight: 600;
   line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .sni-desc {
@@ -869,12 +871,28 @@ tbody tr.selected-row {
   z-index: 1;
 }
 
+.ai-panel-header--module {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem 0.8rem;
+}
+
 .ai-panel-title {
   font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--ink);
+}
+
+.ai-panel-desc {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .ai-panel-count {

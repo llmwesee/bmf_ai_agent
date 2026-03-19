@@ -43,7 +43,7 @@ const NAV = [
   { id: "collection_monitoring", label: "Collections", desc: "AR Monitor" },
   { id: "revenue_forecasting", label: "Revenue Forecast", desc: "Projections" },
   { id: "agent_activity", label: "Agent Activity", desc: "Audit Log" },
-  { id: "thresholds", label: "Settings", desc: "Thresholds & Controls" },
+  { id: "thresholds", label: "Admin Control", desc: "Thresholds & Controls" },
 ];
 
 const NAV_ICONS = {
@@ -400,6 +400,8 @@ function AiPanel({
   draftLoading,
   onGenerate,
   showNudgeQueue,
+  panelTitle,
+  panelDesc,
 }) {
   const selectedRow =
     sectionRows && selectedRef ? findRow(sectionRows, selectedRef) : null;
@@ -478,6 +480,12 @@ function AiPanel({
   // ── Module: Detail / Entity mode ────────────────────────────────────────────
   return (
     <aside className="ai-panel">
+      {panelTitle && (
+        <div className="ai-panel-header ai-panel-header--module">
+          <span className="ai-panel-title">{panelTitle}</span>
+          {panelDesc && <span className="ai-panel-desc">{panelDesc}</span>}
+        </div>
+      )}
       {!selectedRow ? (
         <div className="ai-empty">
           <div className="ai-empty-icon">◉</div>
@@ -849,6 +857,8 @@ function RevenuePage({
           onGenerate={onGenerate}
           onApprove={onApprove}
           showNudgeQueue={false}
+          panelTitle="AI Action Panel"
+          panelDesc="Select a project to review revenue gaps and draft account manager follow-ups."
         />
       </div>
     </div>
@@ -993,6 +1003,8 @@ function BillingPage({
           onGenerate={onGenerate}
           onApprove={onApprove}
           showNudgeQueue={false}
+          panelTitle="AI Action Panel"
+          panelDesc="Select a milestone to review billing readiness and draft invoicing notifications."
         />
       </div>
     </div>
@@ -1125,6 +1137,8 @@ function UnbilledPage({
           onGenerate={onGenerate}
           onApprove={onApprove}
           showNudgeQueue={false}
+          panelTitle="AI Action Panel"
+          panelDesc="Select a project to review unbilled work and draft billing trigger requests."
         />
       </div>
     </div>
@@ -1276,6 +1290,8 @@ function CollectionsPage({
           onGenerate={onGenerate}
           onApprove={onApprove}
           showNudgeQueue={false}
+          panelTitle="AI Action Panel"
+          panelDesc="Select an invoice to review overdue AR and draft payment follow-up communications."
         />
       </div>
     </div>
@@ -1459,6 +1475,8 @@ function ForecastPage({
           onGenerate={onGenerate}
           onApprove={onApprove}
           showNudgeQueue={false}
+          panelTitle="AI Action Panel"
+          panelDesc="Select a project to review forecast risk and draft proactive outreach to close gaps."
         />
       </div>
     </div>
