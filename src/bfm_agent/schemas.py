@@ -90,6 +90,8 @@ class RevenueRealizationRow(BaseModel):
     risk_level: RiskLevel
     last_revenue_update: str
     revenue_delay_days: int
+    unbilled_amount: float = 0.0
+    outstanding_collection: float = 0.0
     analysis: AgentAnalysis
 
 

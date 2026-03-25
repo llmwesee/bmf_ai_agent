@@ -1815,6 +1815,95 @@ tbody tr.selected-row {
   flex-direction: column;
 }
 
+.modal-box--wide {
+  width: min(820px, 96vw);
+}
+
+/* ── Project Detail Modal ─────────────────────────────────────────────────── */
+.pdm-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.pdm-sub {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+.pdm-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.pdm-body {
+  padding: 1rem 1.25rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem;
+}
+.pdm-domain {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.85rem;
+}
+.pdm-domain-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-strong);
+  margin-bottom: 0.55rem;
+}
+.pdm-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem 0.75rem;
+}
+.pdm-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.pdm-mlabel {
+  font-size: 0.64rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.pdm-mval {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.pdm-none {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.pdm-billing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.pdm-billing-row {
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--line);
+}
+.pdm-billing-row:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+.pdm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--line);
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -1919,4 +2008,204 @@ tbody tr.selected-row {
   padding: 0.42rem 1rem;
   font-size: 0.78rem;
   white-space: nowrap;
+}
+
+/* ── Accordion Toggle ─────────────────────────────────────────────────────── */
+.accordion-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.85rem 1rem 0.7rem;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+}
+.accordion-toggle:hover {
+  background: var(--hover);
+}
+.accordion-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.accordion-chevron {
+  font-size: 0.6rem;
+  color: var(--muted);
+}
+
+/* ── AI Agent Action Section ──────────────────────────────────────────────── */
+.agent-action-section {
+  border-top: 2px solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+.agent-action-header {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+  padding: 0.85rem 1rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.agent-action-empty {
+  padding: 1.5rem 1rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.55;
+}
+.agent-action-detail {
+  padding: 0.75rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.aad-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.aad-account {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ink);
+  flex: 1;
+}
+.aad-project {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.aad-domain {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+}
+.aad-domain-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-strong);
+  margin-bottom: 0.45rem;
+}
+.aad-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem 0.75rem;
+}
+.aad-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.aad-mlabel {
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.aad-mval {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.aad-none {
+  font-size: 0.73rem;
+  color: var(--muted);
+}
+.aad-analyze-btn {
+  margin-top: 0.5rem;
+  width: 100%;
+  padding: 0.65rem;
+  font-size: 0.82rem;
+}
+
+/* ── Column Header Info Tooltip ───────────────────────────────────────────── */
+.th-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.col-info-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.col-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-style: italic;
+  font-weight: 700;
+  cursor: default;
+  line-height: 1;
+}
+.col-info-tooltip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  background: #1a2332;
+  color: #e8edf3;
+  font-size: 0.68rem;
+  font-weight: 400;
+  line-height: 1.5;
+  padding: 0.5rem 0.65rem;
+  border-radius: 7px;
+  z-index: 400;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+  pointer-events: none;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.col-info-wrap:hover .col-info-tooltip {
+  display: block;
+}
+
+/* ── Row Analyze Button ───────────────────────────────────────────────────── */
+.row-analyze-btn {
+  font-size: 0.7rem;
+  padding: 0.3rem 0.65rem;
+  white-space: nowrap;
+}
+
+/* ── Email input in DraftWidget ───────────────────────────────────────────── */
+.dw-email-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--bg);
+  outline: none;
+  box-sizing: border-box;
+}
+.dw-email-input:focus {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px rgba(13,148,136,0.15);
 }

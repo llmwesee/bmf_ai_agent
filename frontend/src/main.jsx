@@ -183,7 +183,15 @@ function DataTable({
                 key={col.key}
                 style={col.width ? { width: col.width, minWidth: col.width } : {}}
               >
-                {col.label}
+                <span className="th-inner">
+                  {col.label}
+                  {col.info && (
+                    <span className="col-info-wrap">
+                      <span className="col-info-icon">i</span>
+                      <span className="col-info-tooltip">{col.info}</span>
+                    </span>
+                  )}
+                </span>
               </th>
             ))}
           </tr>
@@ -296,10 +304,13 @@ function AnalysisWidget({ analysis }) {
 // ── Draft Widget ──────────────────────────────────────────────────────────────
 function DraftWidget({ draft, sending, channel, setChannel, onApprove }) {
   const [body, setBody] = useState(draft?.email_body || "");
+  const [toEmail, setToEmail] = useState(draft?.recipient_email || "");
+  const [ccEmails, setCcEmails] = useState("");
 
   useEffect(() => {
     setBody(draft?.email_body || "");
-  }, [draft?.email_body]);
+    setToEmail(draft?.recipient_email || "");
+  }, [draft?.email_body, draft?.recipient_email]);
 
   if (!draft) return null;
 
@@ -311,6 +322,28 @@ function DraftWidget({ draft, sending, channel, setChannel, onApprove }) {
       </div>
 
       {draft.nudge && <div className="dw-nudge">{draft.nudge}</div>}
+
+      <div className="dw-field">
+        <label className="dw-field-label">To</label>
+        <input
+          className="dw-email-input"
+          type="email"
+          value={toEmail}
+          onChange={(e) => setToEmail(e.target.value)}
+          placeholder="recipient@example.com"
+        />
+      </div>
+
+      <div className="dw-field">
+        <label className="dw-field-label">CC (optional)</label>
+        <input
+          className="dw-email-input"
+          type="text"
+          value={ccEmails}
+          onChange={(e) => setCcEmails(e.target.value)}
+          placeholder="cc1@example.com, cc2@example.com"
+        />
+      </div>
 
       <div className="dw-field">
         <label className="dw-field-label">Subject</label>
@@ -345,14 +378,14 @@ function DraftWidget({ draft, sending, channel, setChannel, onApprove }) {
           value={channel}
           onChange={(e) => setChannel(e.target.value)}
         >
-          <option value="mock_email">Mock Email (Demo)</option>
+          <option value="email">Email</option>
           <option value="gmail">Gmail</option>
         </select>
       </div>
 
       <button
         className="btn-primary dw-approve-btn"
-        onClick={() => onApprove && onApprove(body)}
+        onClick={() => onApprove && onApprove(body, toEmail, ccEmails)}
         disabled={sending}
       >
         {sending ? "Sending…" : "✓ Approve & Send"}
@@ -390,6 +423,181 @@ function DraftModal({ open, draft, draftLoading, sending, channel, setChannel, o
   );
 }
 
+// ── Project Detail Modal ───────────────────────────────────────────────────────
+function ProjectDetailModal({ row, crossData, onClose, onAnalyze, draftLoading }) {
+  if (!row) return null;
+  const project = row.project_code;
+  const billingRows = (crossData?.billing || []).filter((r) => r.project_code === project);
+  const unbilledRow = (crossData?.unbilled || []).find((r) => r.project_code === project);
+  const collectionRows = (crossData?.collections || []).filter((r) => r.project_code === project);
+  const forecastRow = (crossData?.forecast || []).find((r) => r.project_code === project);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box modal-box--wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="pdm-title-block">
+            <span className="modal-title">{row.account_name}</span>
+            <span className="pdm-sub">{project} · {row.delivery_unit || ""}</span>
+          </div>
+          <div className="pdm-header-right">
+            <RiskBadge level={row.risk_level} />
+            <button className="modal-close" onClick={onClose}>✕</button>
+          </div>
+        </div>
+
+        <div className="pdm-body">
+          {/* Revenue Realization */}
+          <div className="pdm-domain">
+            <div className="pdm-domain-title">Revenue Realization</div>
+            <div className="pdm-metrics">
+              {[
+                { label: "Revenue Plan", val: shortMoney(row.revenue_plan || 0) },
+                { label: "Recognized", val: shortMoney(row.revenue_recognized || 0) },
+                { label: "Revenue Gap", val: shortMoney(row.revenue_gap || 0), color: (row.revenue_gap || 0) < 0 ? "var(--danger)" : "var(--success)" },
+                { label: "Completion", val: pctFmt.format(row.revenue_completion_pct || 0) },
+                { label: "Forecast", val: shortMoney(row.revenue_forecast || 0) },
+                { label: "Burn Rate", val: shortMoney(row.revenue_burn_rate || 0) + "/wk" },
+              ].map(({ label, val, color }) => (
+                <div className="pdm-metric" key={label}>
+                  <span className="pdm-mlabel">{label}</span>
+                  <span className="pdm-mval" style={color ? { color } : {}}>{val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Unbilled Revenue */}
+          <div className="pdm-domain">
+            <div className="pdm-domain-title">Unbilled Revenue</div>
+            {unbilledRow ? (
+              <div className="pdm-metrics">
+                {[
+                  { label: "Unbilled Amount", val: shortMoney(unbilledRow.unbilled_revenue || 0), color: (unbilledRow.unbilled_revenue || 0) > 0 ? "var(--warning)" : undefined },
+                  { label: "Revenue Recognized", val: shortMoney(unbilledRow.revenue_recognized || 0) },
+                  { label: "Revenue Billed", val: shortMoney(unbilledRow.revenue_billed || 0) },
+                  { label: "Days Unbilled", val: `${unbilledRow.days_unbilled ?? 0} days` },
+                ].map(({ label, val, color }) => (
+                  <div className="pdm-metric" key={label}>
+                    <span className="pdm-mlabel">{label}</span>
+                    <span className="pdm-mval" style={color ? { color } : {}}>{val}</span>
+                  </div>
+                ))}
+              </div>
+            ) : row.unbilled_amount > 0 ? (
+              <div className="pdm-metrics">
+                <div className="pdm-metric">
+                  <span className="pdm-mlabel">Unbilled Amount</span>
+                  <span className="pdm-mval" style={{ color: "var(--warning)" }}>{shortMoney(row.unbilled_amount)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="pdm-none">✓ No unbilled exposure</div>
+            )}
+          </div>
+
+          {/* Billing Triggers */}
+          <div className="pdm-domain">
+            <div className="pdm-domain-title">Billing Triggers</div>
+            {billingRows.length > 0 ? (
+              <div className="pdm-billing-list">
+                {billingRows.map((b, i) => (
+                  <div className="pdm-billing-row" key={i}>
+                    <div className="pdm-metrics">
+                      {[
+                        { label: "Milestone", val: b.billing_milestone || "—" },
+                        { label: "Billable Amount", val: shortMoney(b.billable_amount || 0) },
+                        { label: "Unbilled", val: shortMoney(b.unbilled_amount || 0), color: (b.unbilled_amount || 0) > 0 ? "var(--warning)" : undefined },
+                        { label: "Status", val: b.billing_status || "—" },
+                        { label: "Delay", val: b.billing_delay_days ? `${b.billing_delay_days} days` : "—" },
+                      ].map(({ label, val, color }) => (
+                        <div className="pdm-metric" key={label}>
+                          <span className="pdm-mlabel">{label}</span>
+                          <span className="pdm-mval" style={color ? { color } : {}}>{val}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="pdm-none">✓ No pending billing milestones</div>
+            )}
+          </div>
+
+          {/* Collections / AR */}
+          <div className="pdm-domain">
+            <div className="pdm-domain-title">Collections / AR</div>
+            {collectionRows.length > 0 ? (
+              <div className="pdm-billing-list">
+                {collectionRows.map((c, i) => (
+                  <div className="pdm-billing-row" key={i}>
+                    <div className="pdm-metrics">
+                      {[
+                        { label: "Invoice", val: c.invoice_number || "—" },
+                        { label: "Invoice Amount", val: shortMoney(c.invoice_amount || 0) },
+                        { label: "Outstanding", val: shortMoney(c.outstanding_balance || 0), color: (c.outstanding_balance || 0) > 0 ? "var(--danger)" : undefined },
+                        { label: "Days Outstanding", val: `${c.days_outstanding ?? 0} days` },
+                        { label: "Due Date", val: fmtDate(c.payment_due_date) },
+                      ].map(({ label, val, color }) => (
+                        <div className="pdm-metric" key={label}>
+                          <span className="pdm-mlabel">{label}</span>
+                          <span className="pdm-mval" style={color ? { color } : {}}>{val}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : row.outstanding_collection > 0 ? (
+              <div className="pdm-metrics">
+                <div className="pdm-metric">
+                  <span className="pdm-mlabel">Outstanding AR</span>
+                  <span className="pdm-mval" style={{ color: "var(--danger)" }}>{shortMoney(row.outstanding_collection)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="pdm-none">✓ No overdue AR</div>
+            )}
+          </div>
+
+          {/* Revenue Forecast */}
+          <div className="pdm-domain">
+            <div className="pdm-domain-title">Revenue Forecast</div>
+            {forecastRow ? (
+              <div className="pdm-metrics">
+                {[
+                  { label: "Forecast", val: shortMoney(forecastRow.revenue_forecast || 0) },
+                  { label: "Revenue Gap", val: shortMoney(forecastRow.revenue_gap || 0), color: (forecastRow.revenue_gap || 0) < 0 ? "var(--danger)" : "var(--success)" },
+                  { label: "Confidence", val: forecastRow.forecast_confidence != null ? pctFmt.format(forecastRow.forecast_confidence) : "—" },
+                ].map(({ label, val, color }) => (
+                  <div className="pdm-metric" key={label}>
+                    <span className="pdm-mlabel">{label}</span>
+                    <span className="pdm-mval" style={color ? { color } : {}}>{val}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="pdm-none">No forecast data available</div>
+            )}
+          </div>
+        </div>
+
+        <div className="pdm-footer">
+          <button className="btn-secondary" onClick={onClose}>Close</button>
+          <button
+            className="btn-primary"
+            onClick={onAnalyze}
+            disabled={draftLoading}
+          >
+            {draftLoading ? "Generating…" : "Analyze & Draft Action"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── AI Panel ──────────────────────────────────────────────────────────────────
 function AiPanel({
   panelItems,
@@ -403,6 +611,7 @@ function AiPanel({
   panelTitle,
   panelDesc,
 }) {
+  const [alertsOpen, setAlertsOpen] = useState(true);
   const selectedRow =
     sectionRows && selectedRef ? findRow(sectionRows, selectedRef) : null;
   const nudge =
@@ -414,65 +623,72 @@ function AiPanel({
   if (showNudgeQueue) {
     return (
       <aside className="ai-panel">
-        <div className="ai-panel-header">
-          <span className="ai-panel-title">Agent Alerts</span>
-          {panelItems && panelItems.length > 0 && (
-            <span className="ai-panel-count">{panelItems.length}</span>
-          )}
-        </div>
-
-        {(!panelItems || panelItems.length === 0) && (
-          <div className="ai-empty">
-            <div className="ai-empty-icon">✓</div>
-            <div className="ai-empty-text">
-              All accounts on track. No action required today.
-            </div>
+        <button
+          className="accordion-toggle"
+          onClick={() => setAlertsOpen((v) => !v)}
+        >
+          <div className="accordion-toggle-left">
+            <span className="ai-panel-title">Agent Alerts</span>
+            {panelItems && panelItems.length > 0 && (
+              <span className="ai-panel-count">{panelItems.length}</span>
+            )}
           </div>
-        )}
+          <span className="accordion-chevron">{alertsOpen ? "▲" : "▼"}</span>
+        </button>
 
-        <div className="nudge-list">
-          {(panelItems || []).map((n) => {
-            const ref = {
-              agent_key: n.agent_key,
-              entity_type: n.entity_type,
-              entity_id: n.entity_id,
-            };
-            const isActive = selectedRef && sameSel(selectedRef, ref);
-            return (
-              <div
-                key={n.id}
-                className={`nudge-card severity-${riskCls(n.severity)}${isActive ? " active" : ""}`}
-              >
-                <div className="nc-top">
-                  <div className="nc-account">{n.account_name}</div>
-                  <RiskBadge level={n.severity} />
-                </div>
-                <div className="nc-title">{n.title}</div>
-                <div className="nc-message">{n.message}</div>
-                {n.suggested_action && (
-                  <div className="nc-action">→ {n.suggested_action}</div>
-                )}
-                <div className="nc-buttons">
-                  <button
-                    className="btn-sm btn-primary"
-                    onClick={() => onNudgeSelect(ref)}
-                    disabled={draftLoading}
-                  >
-                    {isActive && hasDraft ? "Regenerate" : "Analyze & Draft"}
-                  </button>
+        {alertsOpen && (
+          <>
+            {(!panelItems || panelItems.length === 0) && (
+              <div className="ai-empty">
+                <div className="ai-empty-icon">✓</div>
+                <div className="ai-empty-text">
+                  All accounts on track. No action required today.
                 </div>
               </div>
-            );
-          })}
-        </div>
-
-        {draftLoading && (
-          <div className="ai-generating">
-            <div className="ai-spinner" />
-            <span>AI is analyzing…</span>
-          </div>
+            )}
+            <div className="nudge-list">
+              {(panelItems || []).map((n) => {
+                const ref = {
+                  agent_key: n.agent_key,
+                  entity_type: n.entity_type,
+                  entity_id: n.entity_id,
+                };
+                const isActive = selectedRef && sameSel(selectedRef, ref);
+                return (
+                  <div
+                    key={n.id}
+                    className={`nudge-card severity-${riskCls(n.severity)}${isActive ? " active" : ""}`}
+                  >
+                    <div className="nc-top">
+                      <div className="nc-account">{n.account_name}</div>
+                      <RiskBadge level={n.severity} />
+                    </div>
+                    <div className="nc-title">{n.title}</div>
+                    <div className="nc-message">{n.message}</div>
+                    {n.suggested_action && (
+                      <div className="nc-action">→ {n.suggested_action}</div>
+                    )}
+                    <div className="nc-buttons">
+                      <button
+                        className="btn-sm btn-primary"
+                        onClick={() => onNudgeSelect(ref)}
+                        disabled={draftLoading}
+                      >
+                        {isActive && hasDraft ? "Regenerate" : "Analyze & Draft"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {draftLoading && (
+              <div className="ai-generating">
+                <div className="ai-spinner" />
+                <span>AI is analyzing…</span>
+              </div>
+            )}
+          </>
         )}
-
       </aside>
     );
   }
@@ -564,6 +780,7 @@ function OverviewPage({
   dashboard,
   selectedRef,
   onNudgeSelect,
+  onRowClick,
   draft,
   draftLoading,
   sending,
@@ -572,6 +789,19 @@ function OverviewPage({
   onGenerate,
   onApprove,
 }) {
+  const [detailRow, setDetailRow] = useState(null);
+  const crossData = {
+    billing: dashboard.billing_trigger?.rows,
+    unbilled: dashboard.unbilled_revenue?.rows,
+    collections: dashboard.collection_monitoring?.rows,
+    forecast: dashboard.revenue_forecasting?.rows,
+  };
+
+  function handleRowSelect(row) {
+    setDetailRow(row);
+    onRowClick && onRowClick(row);
+  }
+
   const ov = dashboard.overview;
   const narrative = dashboard.narrative;
   const queue = dashboard.queue || [];
@@ -624,21 +854,21 @@ function OverviewPage({
     },
   ];
 
-  // At-risk rows from revenue section (high + medium, sorted by risk)
-  const atRiskRows = (dashboard.revenue_realization?.rows || [])
-    .filter((r) => r.risk_level === "High" || r.risk_level === "Medium")
+  // All revenue rows sorted by risk then gap
+  const allAccountRows = (dashboard.revenue_realization?.rows || [])
+    .slice()
     .sort((a, b) => {
       const order = { High: 0, Medium: 1, Low: 2 };
-      return order[a.risk_level] - order[b.risk_level];
-    })
-    .slice(0, 12);
+      return (order[a.risk_level] ?? 3) - (order[b.risk_level] ?? 3);
+    });
 
   const atRiskCols = [
-    { key: "account_name", label: "Account" },
-    { key: "project_code", label: "Project" },
+    { key: "account_name", label: "Account", info: "Client / company name for this project." },
+    { key: "project_code", label: "Project", info: "Unique project identifier assigned internally." },
     {
       key: "revenue_gap",
-      label: "Rev. Gap",
+      label: "Revenue Gap",
+      info: "Forecast − Plan. Negative means the project is projected to miss its monthly revenue target.",
       render: (v) => (
         <span style={{ color: v < 0 ? "var(--danger)" : "inherit" }}>
           {shortMoney(v)}
@@ -648,17 +878,38 @@ function OverviewPage({
     {
       key: "unbilled_amount",
       label: "Unbilled",
+      info: "Revenue recognized (earned) but not yet invoiced to the client.",
       render: (v) => shortMoney(v || 0),
     },
     {
       key: "outstanding_collection",
       label: "Overdue AR",
+      info: "Invoice amount that is past its due date and still unpaid by the client.",
       render: (v) => shortMoney(v || 0),
     },
     {
       key: "risk_level",
       label: "Risk",
+      info: "Overall project health — High/Medium/Low — based on revenue gap, unbilled exposure, and overdue AR thresholds.",
       render: (v) => <RiskBadge level={v} />,
+    },
+    {
+      key: "_analyze",
+      label: "",
+      render: (_, row) => (
+        <button
+          className="btn-sm btn-primary row-analyze-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRowClick && onRowClick(row);
+            const ref = { agent_key: "revenue_realization", entity_type: row.entity_type, entity_id: row.entity_id };
+            onGenerate && onGenerate(ref);
+          }}
+          disabled={draftLoading}
+        >
+          Analyze & Draft
+        </button>
+      ),
     },
   ];
 
@@ -684,7 +935,7 @@ function OverviewPage({
                     <span className="na-name">{acc.account_name}</span>
                     <div className="na-metrics">
                       <span className="na-metric">
-                        Gap:{" "}
+                        Revenue Gap:{" "}
                         <strong
                           style={{
                             color:
@@ -719,16 +970,19 @@ function OverviewPage({
             )}
           </div>
 
-          {/* At-risk accounts table */}
+          {/* Accounts table */}
           <div className="panel">
             <SectionHeader
-              title="Accounts at Risk"
-              sub={`${atRiskRows.length} projects flagged as Medium or High risk`}
+              title="Accounts"
+              sub={`${allAccountRows.length} projects · click a row to review full project details`}
             />
             <DataTable
               columns={atRiskCols}
-              rows={atRiskRows}
-              emptyText="✓ All accounts are on track. No action required."
+              rows={allAccountRows}
+              onRowClick={handleRowSelect}
+              selectedRef={selectedRef}
+              agentKey="revenue_realization"
+              emptyText="No project data available."
             />
           </div>
         </div>
@@ -747,6 +1001,20 @@ function OverviewPage({
           showNudgeQueue={true}
         />
       </div>
+
+      {detailRow && (
+        <ProjectDetailModal
+          row={detailRow}
+          crossData={crossData}
+          draftLoading={draftLoading}
+          onClose={() => setDetailRow(null)}
+          onAnalyze={() => {
+            const ref = { agent_key: "revenue_realization", entity_type: detailRow.entity_type, entity_id: detailRow.entity_id };
+            onGenerate(ref);
+            setDetailRow(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -803,7 +1071,7 @@ function RevenuePage({
     { key: "revenue_recognized", label: "Recognized", render: (v) => shortMoney(v) },
     {
       key: "revenue_gap",
-      label: "Gap",
+      label: "Revenue Gap",
       render: (v) => (
         <span style={{ color: v < 0 ? "var(--danger)" : "var(--success)" }}>
           {shortMoney(v)}
@@ -1364,7 +1632,7 @@ function ForecastPage({
     },
     {
       key: "revenue_gap",
-      label: "Gap",
+      label: "Revenue Gap",
       render: (v) => (
         <span style={{ color: v < 0 ? "var(--danger)" : "var(--success)" }}>
           {shortMoney(v)}
@@ -1539,7 +1807,7 @@ function PendingApprovalCard({ notification, onResolve }) {
 function ActivityPage({ notifications, onResolve }) {
   const all = notifications || [];
   const pending = all.filter(
-    (n) => n.direction === "outbound" && (n.status === "Mock Sent" || n.status === "Sent")
+    (n) => n.direction === "outbound" && (n.status === "Mock Sent" || n.status === "Sent" || n.status === "mock_sent")
   );
   const rows = [...all].sort(
     (a, b) => new Date(b.created_at) - new Date(a.created_at)
@@ -1888,14 +2156,14 @@ function TopBar({
 }
 
 // ── App Root ──────────────────────────────────────────────────────────────────
-function App({ appName, defaultProvider }) {
+function App({ defaultProvider }) {
   const [providers, setProviders] = useState([]);
   const [provider, setProvider] = useState(defaultProvider || "mock");
   const [dashboard, setDashboard] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedRef, setSelectedRef] = useState(null);
   const [draft, setDraft] = useState(null);
-  const [channel, setChannel] = useState("mock_email");
+  const [channel, setChannel] = useState("email");
   const [thresholdDrafts, setThresholdDrafts] = useState({});
   const [loading, setLoading] = useState(true);
   const [draftLoading, setDraftLoading] = useState(false);
@@ -1960,6 +2228,7 @@ function App({ appName, defaultProvider }) {
 
   function agentKeyForTab(tabId) {
     const keys = {
+      overview: "revenue_realization",
       revenue_realization: "revenue_realization",
       billing_trigger: "billing_trigger",
       unbilled_revenue: "unbilled_revenue",
@@ -2206,6 +2475,7 @@ function App({ appName, defaultProvider }) {
                   dashboard={{ ...dashboard, queue: visibleQueue }}
                   selectedRef={selectedRef}
                   onNudgeSelect={handleNudgeSelect}
+                  onRowClick={handleRowClick}
                   draft={draft}
                   draftLoading={draftLoading}
                   sending={sending}

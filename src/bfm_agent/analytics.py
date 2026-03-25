@@ -300,6 +300,8 @@ class AnalyticsService:
                     risk_level=risk,
                     last_revenue_update=snapshot.last_revenue_update,
                     revenue_delay_days=snapshot.revenue_delay_days,
+                    unbilled_amount=snapshot.unbilled_revenue,
+                    outstanding_collection=snapshot.overdue_amount,
                     analysis=analysis,
                 )
             )
