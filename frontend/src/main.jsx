@@ -115,6 +115,17 @@ function RiskBadge({ level }) {
   );
 }
 
+// Composite risk for the Accounts overview table based on three KPIs:
+// revenue gap %, unbilled revenue, and overdue AR
+function compositeRisk(row) {
+  const shortfall = row.revenue_plan > 0 ? Math.max(-row.revenue_gap, 0) / row.revenue_plan : 0;
+  const unbilled = row.unbilled_amount || 0;
+  const overdue = row.outstanding_collection || 0;
+  if (shortfall >= 0.12 || unbilled >= 300_000 || overdue >= 200_000) return "High";
+  if (shortfall >= 0.05 || unbilled >= 120_000 || overdue >= 100_000) return "Medium";
+  return "Low";
+}
+
 function StatusBadge({ value }) {
   const cls = value ? value.toLowerCase().replace(/[\s/_]+/g, "-") : "";
   return (
@@ -854,12 +865,16 @@ function OverviewPage({
     },
   ];
 
-  // All revenue rows sorted by risk then gap
+  // All revenue rows with composite risk (revenue gap %, unbilled, overdue AR) sorted High→Low
   const allAccountRows = (dashboard.revenue_realization?.rows || [])
     .slice()
+    .map((row) => ({ ...row, risk_level: compositeRisk(row) }))
     .sort((a, b) => {
       const order = { High: 0, Medium: 1, Low: 2 };
-      return (order[a.risk_level] ?? 3) - (order[b.risk_level] ?? 3);
+      const riskDiff = (order[a.risk_level] ?? 3) - (order[b.risk_level] ?? 3);
+      if (riskDiff !== 0) return riskDiff;
+      // Within same risk tier: sort by worst signal first
+      return Math.min(b.revenue_gap, 0) - Math.min(a.revenue_gap, 0);
     });
 
   const atRiskCols = [
@@ -890,7 +905,7 @@ function OverviewPage({
     {
       key: "risk_level",
       label: "Risk",
-      info: "Overall project health — High/Medium/Low — based on revenue gap, unbilled exposure, and overdue AR thresholds.",
+      info: "Composite health across 3 signals. High: revenue gap >12% of plan, Unbilled >$300K, or Overdue AR >$200K. Medium: gap >5%, Unbilled >$120K, or Overdue AR >$100K. Low: all within limits.",
       render: (v) => <RiskBadge level={v} />,
     },
     {
