@@ -341,7 +341,7 @@ function DraftWidget({ draft, sending, channel, setChannel, onApprove }) {
           type="email"
           value={toEmail}
           onChange={(e) => setToEmail(e.target.value)}
-          placeholder="recipient@example.com"
+          placeholder="recipient@gmail.com"
         />
       </div>
 
@@ -352,7 +352,7 @@ function DraftWidget({ draft, sending, channel, setChannel, onApprove }) {
           type="text"
           value={ccEmails}
           onChange={(e) => setCcEmails(e.target.value)}
-          placeholder="cc1@example.com, cc2@example.com"
+          placeholder="cc1@gmail.com, cc2@gmail.com"
         />
       </div>
 
