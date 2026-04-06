@@ -257,6 +257,7 @@ class AgentResponse(BaseModel):
     email_subject: str
     email_body: str
     recommended_action: str
+    recipient_email: str = ""
     trace_id: str | None = None
     trace_url: str | None = None
 

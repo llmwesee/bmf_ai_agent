@@ -269,6 +269,7 @@ class BFMAgentRunner:
             email_subject=draft["subject"],
             email_body=draft["body"],
             recommended_action=draft["recommended_action"],
+            recipient_email=str(context.get("recipient_email", "")),
             trace_id=trace_id,
             trace_url=trace_url,
         )
